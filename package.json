@@ -1,0 +1,14 @@
+{
+  "name": "opencode-reminders",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@opencode-ai/plugin": "^0.15.7",
+    "@opencode-ai/sdk": "^0.15.7",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.9",
+    "typescript": "^5.8.2"
+  }
+}
