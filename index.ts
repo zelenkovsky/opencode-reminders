@@ -17,11 +17,19 @@ export const RemindersPlugin: Plugin = async (ctx) => {
     projectID: project.id,
   }
 
+  // Configuration with defaults
+  let config = {
+    enabled: true,
+    max_reminders_per_project: 50,
+    min_interval_seconds: 30,
+  }
+
   const gracePeriod = 60 * 60 * 1000
   const now = Date.now()
   let restoredCount = 0
   let expiredCount = 0
   let invalidCount = 0
+  let healthyCount = 0
 
   const storedReminders = await listReminders(ctx)
 
@@ -49,7 +57,19 @@ export const RemindersPlugin: Plugin = async (ctx) => {
 
       state.reminders.set(reminder.id, reminder)
       await scheduleTimer(reminder, ctx, state)
-      restoredCount++
+
+      // Validate timer was actually created (timer health validation)
+      const isHealthy = state.timers.has(reminder.id)
+      if (isHealthy) {
+        restoredCount++
+        healthyCount++
+        console.log(`[RemindersPlugin] Restored and validated reminder ${reminder.id}`)
+      } else {
+        await deleteReminder(reminder.id, ctx)
+        state.reminders.delete(reminder.id)
+        invalidCount++
+        console.warn(`[RemindersPlugin] Timer restoration failed for ${reminder.id}, cancelled reminder`)
+      }
     } catch (error) {
       console.error(`[RemindersPlugin] Failed to restore reminder:`, error)
       if (reminder.id) {
@@ -60,7 +80,7 @@ export const RemindersPlugin: Plugin = async (ctx) => {
   }
 
   console.log(
-    `[RemindersPlugin] Restored ${restoredCount} reminders (${expiredCount} expired, ${invalidCount} invalid)`,
+    `[RemindersPlugin] Timer persistence validation completed: ${storedReminders.length} total, ${restoredCount} restored, ${expiredCount} expired, ${invalidCount} invalid, ${healthyCount} healthy`,
   )
 
   process.on("beforeExit", () => {
@@ -71,6 +91,14 @@ export const RemindersPlugin: Plugin = async (ctx) => {
   })
 
   return {
+    async config(cfg) {
+      const cfgAny = cfg as any
+      if (cfgAny.reminders) {
+        config = { ...config, ...cfgAny.reminders }
+        console.log(`[RemindersPlugin] Configuration updated:`, config)
+      }
+    },
+
     async event({ event }) {
       if (event.type === "session.deleted") {
         const sessionID = event.properties.info.id
@@ -121,7 +149,7 @@ Examples:
         },
 
         async execute(args, context) {
-          const maxReminders = 50
+          const maxReminders = config.max_reminders_per_project
           const existingCount = Array.from(state.reminders.values()).filter(
             (r) => r.sessionID === context.sessionID,
           ).length

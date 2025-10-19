@@ -4,6 +4,7 @@ import type { Reminder } from "./types"
 
 export async function getStorageDir(ctx: PluginInput): Promise<string> {
   const dir = path.join(ctx.directory, ".opencode", "reminders", ctx.project.id)
+  await ctx.$`mkdir -p ${dir}`.quiet()
   await Bun.write(path.join(ctx.directory, ".opencode", "reminders", ".gitignore"), "*")
   return dir
 }

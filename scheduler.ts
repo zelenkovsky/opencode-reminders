@@ -40,6 +40,7 @@ export async function executeReminder(reminder: Reminder, ctx: PluginInput, stat
 
     if (reminder.type === "recurring") {
       reminder.time.nextExecution = Date.now() + reminder.interval
+      state.reminders.set(reminder.id, reminder)
       await saveReminder(reminder, ctx)
       await scheduleTimer(reminder, ctx, state)
       console.log(`Recurring reminder ${reminder.id} rescheduled`)
@@ -53,6 +54,7 @@ export async function executeReminder(reminder: Reminder, ctx: PluginInput, stat
     if (error?.name === "MessageAbortedError") {
       if (reminder.type === "recurring") {
         reminder.time.nextExecution = Date.now() + reminder.interval
+        state.reminders.set(reminder.id, reminder)
         await saveReminder(reminder, ctx)
         await scheduleTimer(reminder, ctx, state)
         console.log(`Recurring reminder ${reminder.id} rescheduled after abort`)
