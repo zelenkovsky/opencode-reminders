@@ -3,6 +3,9 @@ import type { Reminder, State } from "./types"
 import { ReminderSchema } from "./types"
 import { getStorageDir, saveReminder, deleteReminder, listReminders } from "./storage"
 import { scheduleTimer, cancelReminder } from "./scheduler"
+import REMINDERADD_DESCRIPTION from "./tools/reminderadd.txt"
+import REMINDERLIST_DESCRIPTION from "./tools/reminderlist.txt"
+import REMINDERREMOVE_DESCRIPTION from "./tools/reminderremove.txt"
 
 export const RemindersPlugin: Plugin = async (ctx) => {
   const { client, project } = ctx
@@ -116,28 +119,7 @@ export const RemindersPlugin: Plugin = async (ctx) => {
 
     tool: {
       reminderadd: tool({
-        description: `Set up a reminder to re-execute an action later. Use when user asks to 'remind me to...' or 'check X every Y time'. Actually performs the action when triggered, not just notifies.
-
-Parameters:
-  - interval_seconds - Time between executions (minimum 30 seconds)
-  - type - Either "one-time" or "recurring"
-  - action_prompt - The action to perform when triggered (fully resolved with absolute paths)
-  - description - Human-readable label for identifying this reminder
-
-User Pattern Recognition:
-  - "in 5 minutes do X" → one-time, 5min delay
-  - "every hour do Y" → recurring, 1hr interval
-  - "regularly check Z" → recurring, 1min default interval
-
-CRITICAL - Action Prompt Requirements:
-  - Must contain fully resolved information (absolute paths, specific names, concrete data)
-  - Context may change over time, so avoid vague references
-  - Include all necessary details for standalone execution
-
-Examples:
-  - "Wait for 5 min and check this file again for instructions" → Creates one-time reminder
-  - "Check this website regularly and let me know when it has new information" → Sets recurring 1-minute timer
-  - "Check my email every hour and reply that I'm busy" → Creates recurring 1-hour timer`,
+        description: REMINDERADD_DESCRIPTION,
 
         args: {
           interval_seconds: tool.schema.number().min(30).describe("Time interval in seconds (minimum 30)"),
@@ -185,14 +167,7 @@ Examples:
       }),
 
       reminderlist: tool({
-        description: `List all active reminders in this session. Use when user asks 'what reminders do I have' or wants to see scheduled actions.
-
-Returns:
-  - Array of active reminders with descriptions
-  - Next execution time for each reminder
-  - Reminder type (one-time or recurring)
-
-Example Usage: "Show me what I'm waiting for"`,
+        description: REMINDERLIST_DESCRIPTION,
 
         args: {},
 
@@ -218,21 +193,7 @@ Example Usage: "Show me what I'm waiting for"`,
       }),
 
       reminderremove: tool({
-        description: `Cancel a scheduled reminder. Use when user asks to 'stop checking X' or 'cancel the reminder for Y'. Matches user's description pattern to existing reminders.
-
-Parameters:
-  - description_pattern - Text pattern to match against reminder descriptions
-
-Example Usage: "Stop checking my email"
-
-Response Format:
-  - Success: "Reminder cancelled: No longer checking your email every hour"
-  - Error: "No matching reminder found" if pattern doesn't match any active reminders
-
-Usage notes:
-  - Pattern matching is flexible and attempts to find best match
-  - Use reminderlist first to see available reminders if uncertain
-  - Only removes reminders from current session`,
+        description: REMINDERREMOVE_DESCRIPTION,
 
         args: {
           description_pattern: tool.schema
