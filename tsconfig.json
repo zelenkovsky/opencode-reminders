@@ -8,7 +8,8 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "allowSyntheticDefaultImports": true
+    "allowSyntheticDefaultImports": true,
+    "types": ["bun-types"]
   },
-  "include": ["*.ts"]
+  "include": ["*.ts", "test/**/*.ts"]
 }
