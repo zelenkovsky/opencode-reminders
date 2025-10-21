@@ -13,12 +13,20 @@ Schedule actions to run at intervals in OpenCode sessions. Set one-time or recur
 ## Installation
 
 ```bash
-bun install
+bun install opencode-reminders
 ```
 
-This will install dependencies and copy the plugin to `~/.config/opencode/plugin/reminders/`.
+Then add to your `opencode.json`:
 
-OpenCode will automatically discover it when you start the TUI.
+```json
+{
+  "plugin": [
+    "opencode-reminders"
+  ]
+}
+```
+
+OpenCode will automatically load the plugin when you start the TUI.
 
 ## Usage
 
@@ -71,20 +79,51 @@ Reminders stored in:
 
 The `.gitignore` file is automatically created to exclude reminder data from version control.
 
+## Configuration
+
+The plugin supports the following configuration options (set via plugin config):
+
+```typescript
+{
+  reminders: {
+    enabled: true,                    // Enable/disable plugin
+    max_reminders_per_project: 50,    // Maximum reminders per project
+    min_interval_seconds: 30          // Minimum interval between executions
+  }
+}
+```
+
 ## Development
 
 ### Install Dependencies
 
 ```bash
-cd .opencode/plugin/reminders
 bun install
 ```
 
 ### Type Check
 
 ```bash
-bun run tsc --noEmit
+tsc --noEmit
 ```
+
+### Run Tests
+
+```bash
+# Run all tests
+bun test
+
+# Run specific test suite
+bun test test/types.test.ts
+bun test test/storage.test.ts
+bun test test/scheduler.test.ts
+bun test test/integration.test.ts
+
+# Watch mode
+bun test --watch
+```
+
+**Test Coverage:** 35+ tests covering types, storage, scheduling, and integration.
 
 ## Architecture
 
@@ -94,6 +133,8 @@ This plugin demonstrates a multi-file structure:
 - **`types.ts`** - TypeScript types and Zod schemas
 - **`storage.ts`** - Filesystem operations for persistence
 - **`scheduler.ts`** - Timer management and execution logic
+- **`tools/`** - Tool implementations (reminderadd, reminderlist, reminderremove)
+- **`test/`** - Comprehensive test suite
 - **`package.json`** - Dependencies configuration
 - **`tsconfig.json`** - TypeScript configuration
 
