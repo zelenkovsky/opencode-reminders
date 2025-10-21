@@ -1,11 +1,11 @@
-import { Plugin, tool } from "@opencode-ai/plugin"
-import type { Reminder, State } from "./types"
+import { Plugin } from "@opencode-ai/plugin"
+import type { State } from "./types"
 import { ReminderSchema } from "./types"
-import { getStorageDir, saveReminder, deleteReminder, listReminders } from "./storage"
+import { getStorageDir, deleteReminder, listReminders } from "./storage"
 import { scheduleTimer, cancelReminder } from "./scheduler"
-import REMINDERADD_DESCRIPTION from "./tools/reminderadd.txt"
-import REMINDERLIST_DESCRIPTION from "./tools/reminderlist.txt"
-import REMINDERREMOVE_DESCRIPTION from "./tools/reminderremove.txt"
+import { createReminderAddTool } from "./tools/reminderadd"
+import { createReminderListTool } from "./tools/reminderlist"
+import { createReminderRemoveTool } from "./tools/reminderremove"
 
 export const RemindersPlugin: Plugin = async (ctx) => {
   const { client, project } = ctx
@@ -118,118 +118,9 @@ export const RemindersPlugin: Plugin = async (ctx) => {
     },
 
     tool: {
-      reminderadd: tool({
-        description: REMINDERADD_DESCRIPTION,
-
-        args: {
-          interval_seconds: tool.schema.number().min(30).describe("Time interval in seconds (minimum 30)"),
-          type: tool.schema.enum(["one-time", "recurring"]).describe("Whether this reminder runs once or repeatedly"),
-          action_prompt: tool.schema
-            .string()
-            .describe("Fully resolved action with absolute paths and specific identifiers"),
-          description: tool.schema.string().describe("Human-readable description for identification"),
-        },
-
-        async execute(args, context) {
-          const maxReminders = config.max_reminders_per_project
-          const existingCount = Array.from(state.reminders.values()).filter(
-            (r) => r.sessionID === context.sessionID,
-          ).length
-
-          if (existingCount >= maxReminders) {
-            const reminders = Array.from(state.reminders.values()).filter((r) => r.sessionID === context.sessionID)
-            return `Can't set more reminders, too many reminders already active (${existingCount}/${maxReminders}). Current reminders:\n${reminders.map((r) => `- ${r.userDescription}`).join("\n")}`
-          }
-
-          const reminder: Reminder = {
-            id: crypto.randomUUID(),
-            sessionID: context.sessionID,
-            projectID: project.id,
-            type: args.type,
-            interval: args.interval_seconds * 1000,
-            originalPrompt: args.action_prompt,
-            userDescription: args.description,
-            time: {
-              created: Date.now(),
-              nextExecution: Date.now() + args.interval_seconds * 1000,
-            },
-            status: "active",
-          }
-
-          state.reminders.set(reminder.id, reminder)
-          await saveReminder(reminder, ctx)
-          await scheduleTimer(reminder, ctx, state)
-
-          console.log(`[RemindersPlugin] Created ${args.type} reminder ${reminder.id}: ${args.description}`)
-
-          return `Reminder set: ${args.description} (${args.type === "one-time" ? "in" : "every"} ${args.interval_seconds} seconds)`
-        },
-      }),
-
-      reminderlist: tool({
-        description: REMINDERLIST_DESCRIPTION,
-
-        args: {},
-
-        async execute(_args, context) {
-          const reminders = Array.from(state.reminders.values()).filter(
-            (r) => r.sessionID === context.sessionID && r.status === "active",
-          )
-
-          if (reminders.length === 0) {
-            return "No active reminders in this session."
-          }
-
-          const output = reminders
-            .map((r) => {
-              const nextIn = Math.round((r.time.nextExecution - Date.now()) / 1000)
-              const nextText = nextIn > 0 ? `in ${nextIn}s` : "overdue"
-              return `- ${r.userDescription} (${r.type}, next execution ${nextText})`
-            })
-            .join("\n")
-
-          return `Active reminders:\n${output}`
-        },
-      }),
-
-      reminderremove: tool({
-        description: REMINDERREMOVE_DESCRIPTION,
-
-        args: {
-          description_pattern: tool.schema
-            .string()
-            .describe("What the user wants to stop (will match against reminder descriptions)"),
-        },
-
-        async execute(args, context) {
-          const reminders = Array.from(state.reminders.values()).filter(
-            (r) => r.sessionID === context.sessionID && r.status === "active",
-          )
-
-          const pattern = args.description_pattern.toLowerCase()
-          const matches = reminders.filter(
-            (r) =>
-              r.userDescription.toLowerCase().includes(pattern) || r.originalPrompt.toLowerCase().includes(pattern),
-          )
-
-          if (matches.length === 0) {
-            const activeList = reminders.map((r) => `- ${r.userDescription}`).join("\n") || "None"
-            return `No matching reminder found for "${args.description_pattern}". Active reminders:\n${activeList}`
-          }
-
-          if (matches.length > 1) {
-            const matchList = matches.map((r) => `- ${r.userDescription}`).join("\n")
-            return `Multiple reminders match "${args.description_pattern}":\n${matchList}\nPlease be more specific.`
-          }
-
-          const reminder = matches[0]
-          await cancelReminder(reminder.id, ctx, state)
-
-          console.log(`[RemindersPlugin] Cancelled reminder ${reminder.id} via user request`)
-
-          return `Reminder cancelled: ${reminder.userDescription}`
-        },
-      }),
+      reminderadd: createReminderAddTool(ctx, state, () => config),
+      reminderlist: createReminderListTool(state),
+      reminderremove: createReminderRemoveTool(ctx, state),
     },
   }
 }

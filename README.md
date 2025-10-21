@@ -12,7 +12,11 @@ Schedule actions to run at intervals in OpenCode sessions. Set one-time or recur
 
 ## Installation
 
-This plugin is already installed in `.opencode/plugin/reminders/`.
+```bash
+bun install
+```
+
+This will install dependencies and copy the plugin to `~/.config/opencode/plugin/reminders/`.
 
 OpenCode will automatically discover it when you start the TUI.
 
