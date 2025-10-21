@@ -1,9 +1,14 @@
-import { appendFileSync } from "node:fs"
+import { appendFileSync, mkdirSync } from "node:fs"
 import { join } from "node:path"
 import { homedir } from "node:os"
 
 const LOG_DIR = join(homedir(), ".local/share/opencode/log")
 const LOG_FILE = join(LOG_DIR, "reminders.log")
+
+try {
+  mkdirSync(LOG_DIR, { recursive: true })
+} catch (error) {
+}
 
 enum LogLevel {
   DEBUG = 0,
