@@ -88,7 +88,10 @@ The plugin supports the following configuration options (set via plugin config):
   reminders: {
     enabled: true,                    // Enable/disable plugin
     max_reminders_per_project: 50,    // Maximum reminders per project
-    min_interval_seconds: 30          // Minimum interval between executions
+    min_interval_seconds: 30,         // Minimum interval between executions
+    notifications: {
+      enabled: true                   // Enable/disable toast notifications
+    }
   }
 }
 ```
@@ -113,17 +116,27 @@ tsc --noEmit
 # Run all tests
 bun test
 
-# Run specific test suite
+# Run specific test suites
 bun test test/types.test.ts
 bun test test/storage.test.ts
+bun test test/logger.test.ts
+bun test test/config.test.ts
 bun test test/scheduler.test.ts
 bun test test/integration.test.ts
 
 # Watch mode
 bun test --watch
+
+# Using npm scripts
+npm run test
+npm run test:types
+npm run test:storage
+npm run test:logger
+npm run test:integration
+npm run test:watch
 ```
 
-**Test Coverage:** 46 tests covering types, storage, scheduling, and integration.
+**Test Coverage:** Comprehensive test suite covering types, storage, logging, configuration, scheduling, and integration.
 
 ## Architecture
 
@@ -133,6 +146,7 @@ This plugin demonstrates a multi-file structure:
 - **`types.ts`** - TypeScript types and Zod schemas
 - **`storage.ts`** - Filesystem operations for persistence
 - **`scheduler.ts`** - Timer management and execution logic
+- **`logger.ts`** - Logging functionality with configurable levels
 - **`tools/`** - Tool implementations (reminderadd, reminderlist, reminderremove)
 - **`test/`** - Comprehensive test suite
 - **`package.json`** - Dependencies configuration
