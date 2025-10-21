@@ -3,6 +3,7 @@ import type { Reminder, State } from "../types"
 import { saveReminder } from "../storage"
 import { scheduleTimer } from "../scheduler"
 import DESCRIPTION from "./reminderadd.txt"
+import { logger } from "../logger"
 
 export function createReminderAddTool(
   ctx: PluginInput,
@@ -51,7 +52,7 @@ export function createReminderAddTool(
       await saveReminder(reminder, ctx)
       await scheduleTimer(reminder, ctx, state)
 
-      console.log(`[RemindersPlugin] Created ${args.type} reminder ${reminder.id}: ${args.description}`)
+      logger.info(`[RemindersPlugin] Created ${args.type} reminder ${reminder.id}: ${args.description}`)
 
       return `Reminder set: ${args.description} (${args.type === "one-time" ? "in" : "every"} ${args.interval_seconds} seconds)`
     },

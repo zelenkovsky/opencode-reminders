@@ -1,6 +1,7 @@
 import type { PluginInput } from "@opencode-ai/plugin"
 import type { Reminder, State } from "./types"
 import { saveReminder, deleteReminder } from "./storage"
+import { logger } from "./logger"
 
 export async function scheduleTimer(reminder: Reminder, ctx: PluginInput, state: State): Promise<void> {
   const existingTimer = state.timers.get(reminder.id)
@@ -19,7 +20,7 @@ export async function scheduleTimer(reminder: Reminder, ctx: PluginInput, state:
     reminder.time.nextExecution = reminder.time.nextExecution + (missedIntervals * reminder.interval)
     delay = reminder.time.nextExecution - now
     await saveReminder(reminder, ctx)
-    console.log(
+    logger.info(
       `[RemindersPlugin] Skipped ${missedIntervals} missed execution(s) for recurring reminder ${reminder.id}`,
     )
   } else {
@@ -37,11 +38,11 @@ export async function scheduleTimer(reminder: Reminder, ctx: PluginInput, state:
 
   state.timers.set(reminder.id, timer)
 
-  console.log(`Scheduled reminder ${reminder.id} to execute in ${Math.round(delay / 1000)}s`)
+  logger.info(`Scheduled reminder ${reminder.id} to execute in ${Math.round(delay / 1000)}s`)
 }
 
 export async function executeReminder(reminder: Reminder, ctx: PluginInput, state: State): Promise<void> {
-  console.log(`Executing reminder ${reminder.id}: ${reminder.userDescription}`)
+  logger.info(`Executing reminder ${reminder.id}: ${reminder.userDescription}`)
 
   try {
     await ctx.client.session.prompt({
@@ -63,13 +64,13 @@ export async function executeReminder(reminder: Reminder, ctx: PluginInput, stat
       state.reminders.set(reminder.id, reminder)
       await saveReminder(reminder, ctx)
       await scheduleTimer(reminder, ctx, state)
-      console.log(`Recurring reminder ${reminder.id} rescheduled`)
+      logger.info(`Recurring reminder ${reminder.id} rescheduled`)
     } else {
       await cancelReminder(reminder.id, ctx, state)
-      console.log(`One-time reminder ${reminder.id} completed and removed`)
+      logger.info(`One-time reminder ${reminder.id} completed and removed`)
     }
   } catch (error: any) {
-    console.error(`Reminder ${reminder.id} execution failed:`, error)
+    logger.error(`Reminder ${reminder.id} execution failed:`, error)
 
     if (error?.name === "MessageAbortedError") {
       if (reminder.type === "recurring") {
@@ -77,14 +78,14 @@ export async function executeReminder(reminder: Reminder, ctx: PluginInput, stat
         state.reminders.set(reminder.id, reminder)
         await saveReminder(reminder, ctx)
         await scheduleTimer(reminder, ctx, state)
-        console.log(`Recurring reminder ${reminder.id} rescheduled after abort`)
+        logger.info(`Recurring reminder ${reminder.id} rescheduled after abort`)
       } else {
         await cancelReminder(reminder.id, ctx, state)
-        console.log(`One-time reminder ${reminder.id} cancelled after abort`)
+        logger.info(`One-time reminder ${reminder.id} cancelled after abort`)
       }
     } else {
       await cancelReminder(reminder.id, ctx, state)
-      console.log(`Reminder ${reminder.id} cancelled due to error`)
+      logger.info(`Reminder ${reminder.id} cancelled due to error`)
     }
   }
 }
@@ -100,5 +101,5 @@ export async function cancelReminder(id: string, ctx: PluginInput, state: State)
 
   await deleteReminder(id, ctx)
 
-  console.log(`Reminder ${id} cancelled`)
+  logger.info(`Reminder ${id} cancelled`)
 }

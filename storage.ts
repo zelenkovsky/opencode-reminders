@@ -1,6 +1,7 @@
 import path from "path"
 import type { PluginInput } from "@opencode-ai/plugin"
 import type { Reminder } from "./types"
+import { logger } from "./logger"
 
 export async function getStorageDir(ctx: PluginInput): Promise<string> {
   const dir = path.join(ctx.directory, ".opencode", "reminders", ctx.project.id)
@@ -41,7 +42,7 @@ export async function listReminders(ctx: PluginInput): Promise<Reminder[]> {
       const reminder = await Bun.file(file).json()
       reminders.push(reminder)
     } catch (error) {
-      console.error(`Failed to load reminder from ${file}:`, error)
+      logger.error(`Failed to load reminder from ${file}:`, error)
     }
   }
 

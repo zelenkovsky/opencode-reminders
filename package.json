@@ -23,6 +23,7 @@
     "types.ts",
     "storage.ts",
     "scheduler.ts",
+    "logger.ts",
     "tools/",
     "README.md"
   ],
@@ -30,6 +31,7 @@
     "test": "bun test",
     "test:types": "bun test test/types.test.ts",
     "test:storage": "bun test test/storage.test.ts",
+    "test:logger": "bun test test/logger.test.ts",
     "test:integration": "bun test test/integration.test.ts",
     "test:watch": "bun test --watch"
   },

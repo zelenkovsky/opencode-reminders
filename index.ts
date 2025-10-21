@@ -1,4 +1,5 @@
 import { Plugin } from "@opencode-ai/plugin"
+import { logger } from "./logger"
 import type { State } from "./types"
 import { ReminderSchema } from "./types"
 import { getStorageDir, deleteReminder, listReminders } from "./storage"
@@ -10,7 +11,7 @@ import { createReminderRemoveTool } from "./tools/reminderremove"
 const RemindersPlugin: Plugin = async (ctx) => {
   const { client, project } = ctx
 
-  console.log(`[RemindersPlugin] Initializing for project ${project.id}`)
+  logger.info(`[RemindersPlugin] Initializing for project ${project.id}`)
 
   await getStorageDir(ctx)
 
@@ -44,7 +45,7 @@ const RemindersPlugin: Plugin = async (ctx) => {
       // Session cleanup will happen via event hook when session is actually deleted
 
       if (reminder.time.nextExecution + gracePeriod < now) {
-        console.log(`[RemindersPlugin] Reminder ${reminder.id} expired, removing`)
+        logger.info(`[RemindersPlugin] Reminder ${reminder.id} expired, removing`)
         await deleteReminder(reminder.id, ctx)
         expiredCount++
         continue
@@ -58,15 +59,15 @@ const RemindersPlugin: Plugin = async (ctx) => {
       if (isHealthy) {
         restoredCount++
         healthyCount++
-        console.log(`[RemindersPlugin] Restored and validated reminder ${reminder.id}`)
+        logger.info(`[RemindersPlugin] Restored and validated reminder ${reminder.id}`)
       } else {
         await deleteReminder(reminder.id, ctx)
         state.reminders.delete(reminder.id)
         invalidCount++
-        console.warn(`[RemindersPlugin] Timer restoration failed for ${reminder.id}, cancelled reminder`)
+        logger.error(`[RemindersPlugin] Timer restoration failed for ${reminder.id}, cancelled reminder`)
       }
     } catch (error) {
-      console.error(`[RemindersPlugin] Failed to restore reminder:`, error)
+      logger.error(`[RemindersPlugin] Failed to restore reminder:`, error)
       if (reminder.id) {
         await deleteReminder(reminder.id, ctx)
       }
@@ -74,7 +75,7 @@ const RemindersPlugin: Plugin = async (ctx) => {
     }
   }
 
-  console.log(
+  logger.info(
     `[RemindersPlugin] Timer persistence validation completed: ${storedReminders.length} total, ${restoredCount} restored, ${expiredCount} expired, ${invalidCount} invalid, ${healthyCount} healthy`,
   )
 
@@ -90,14 +91,14 @@ const RemindersPlugin: Plugin = async (ctx) => {
       const cfgAny = cfg as any
       if (cfgAny.reminders) {
         config = { ...config, ...cfgAny.reminders }
-        console.log(`[RemindersPlugin] Configuration updated:`, config)
+        logger.info(`[RemindersPlugin] Configuration updated:`, config)
       }
     },
 
     async event({ event }) {
       if (event.type === "session.deleted") {
         const sessionID = event.properties.info.id
-        console.log(`[RemindersPlugin] Session ${sessionID} deleted, cleaning up reminders`)
+        logger.info(`[RemindersPlugin] Session ${sessionID} deleted, cleaning up reminders`)
 
         const remindersToCancel = Array.from(state.reminders.values()).filter((r) => r.sessionID === sessionID)
 
@@ -105,7 +106,7 @@ const RemindersPlugin: Plugin = async (ctx) => {
           await cancelReminder(reminder.id, ctx, state)
         }
 
-        console.log(`[RemindersPlugin] Cancelled ${remindersToCancel.length} reminders for session ${sessionID}`)
+        logger.info(`[RemindersPlugin] Cancelled ${remindersToCancel.length} reminders for session ${sessionID}`)
       }
     },
 
