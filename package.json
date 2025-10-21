@@ -1,11 +1,31 @@
 {
   "name": "opencode-reminders",
   "version": "1.0.0",
+  "description": "Reminder plugin for OpenCode - schedule actions to run at intervals",
+  "keywords": ["opencode", "reactive", "plugin", "reminders", "scheduler"],
+  "author": "zelenkovsky",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zelenkovsky/opencode-reminders"
+  },
+  "bugs": {
+    "url": "https://github.com/zelenkovsky/opencode-reminders/issues"
+  },
+  "homepage": "https://github.com/zelenkovsky/opencode-reminders#readme",
   "type": "module",
   "main": "./index.ts",
   "exports": {
     ".": "./index.ts"
   },
+  "files": [
+    "index.ts",
+    "types.ts",
+    "storage.ts",
+    "scheduler.ts",
+    "tools/",
+    "README.md"
+  ],
   "scripts": {
     "test": "bun test",
     "test:types": "bun test test/types.test.ts",
