@@ -30,17 +30,20 @@ export function createReminderRemoveTool(ctx: PluginInput, state: State) {
         return `No matching reminder found for "${args.description_pattern}". Active reminders:\n${activeList}`
       }
 
-      if (matches.length > 1) {
-        const matchList = matches.map((r) => `- ${r.userDescription}`).join("\n")
-        return `Multiple reminders match "${args.description_pattern}":\n${matchList}\nPlease be more specific.`
+      // Cancel all matching reminders
+      const cancelledDescriptions: string[] = []
+      for (const reminder of matches) {
+        await cancelReminder(reminder.id, ctx, state)
+        cancelledDescriptions.push(reminder.userDescription)
+        logger.info(`[RemindersPlugin] Cancelled reminder ${reminder.id} via user request`)
       }
 
-      const reminder = matches[0]
-      await cancelReminder(reminder.id, ctx, state)
-
-      logger.info(`[RemindersPlugin] Cancelled reminder ${reminder.id} via user request`)
-
-      return `Reminder cancelled: ${reminder.userDescription}`
+      if (matches.length === 1) {
+        return `Reminder cancelled: ${cancelledDescriptions[0]}`
+      } else {
+        const cancelledList = cancelledDescriptions.map((desc) => `- ${desc}`).join("\n")
+        return `${matches.length} reminders cancelled:\n${cancelledList}`
+      }
     },
   })
 }

@@ -220,8 +220,9 @@ describe("Integration Tests", () => {
       { sessionID: "ses-multi-match" } as any,
     )
 
-    expect(result).toContain("Multiple reminders match")
-    expect(result).toContain("more specific")
+    expect(result).toContain("2 reminders cancelled")
+    expect(result).toContain("Check email notification")
+    expect(result).toContain("Check system notification")
   })
 
   test("event handler cleans up reminders on session deletion", async () => {
