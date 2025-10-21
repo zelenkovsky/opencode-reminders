@@ -7,7 +7,7 @@ import { createReminderAddTool } from "./tools/reminderadd"
 import { createReminderListTool } from "./tools/reminderlist"
 import { createReminderRemoveTool } from "./tools/reminderremove"
 
-export const RemindersPlugin: Plugin = async (ctx) => {
+const RemindersPlugin: Plugin = async (ctx) => {
   const { client, project } = ctx
 
   console.log(`[RemindersPlugin] Initializing for project ${project.id}`)
@@ -40,16 +40,8 @@ export const RemindersPlugin: Plugin = async (ctx) => {
     try {
       ReminderSchema.parse(reminder)
 
-      try {
-        await client.session.get({ path: { id: reminder.sessionID } })
-      } catch {
-        console.log(
-          `[RemindersPlugin] Session ${reminder.sessionID} no longer exists, removing reminder ${reminder.id}`,
-        )
-        await deleteReminder(reminder.id, ctx)
-        invalidCount++
-        continue
-      }
+      // Skip session validation during startup - it may not be ready yet
+      // Session cleanup will happen via event hook when session is actually deleted
 
       if (reminder.time.nextExecution + gracePeriod < now) {
         console.log(`[RemindersPlugin] Reminder ${reminder.id} expired, removing`)
@@ -86,12 +78,10 @@ export const RemindersPlugin: Plugin = async (ctx) => {
     `[RemindersPlugin] Timer persistence validation completed: ${storedReminders.length} total, ${restoredCount} restored, ${expiredCount} expired, ${invalidCount} invalid, ${healthyCount} healthy`,
   )
 
-  process.on("beforeExit", () => {
-    console.log(`[RemindersPlugin] Cleaning up ${state.timers.size} timers`)
-    for (const timer of state.timers.values()) {
-      clearTimeout(timer)
-    }
-  })
+  // No explicit cleanup needed:
+  // - timer.unref() allows clean exit without blocking
+  // - Timers will be naturally garbage collected on process exit
+  // - Reminder state persists to storage for restoration on next startup
 
   return {
     async config(cfg) {

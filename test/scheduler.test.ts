@@ -242,4 +242,42 @@ describe("Scheduler", () => {
     expect(updatedReminder!.time.nextExecution).toBeGreaterThanOrEqual(oldNextExecution)
     expect(state.timers.has(reminder.id)).toBe(true)
   })
+
+  test("scheduleTimer maintains cadence for missed recurring reminders", async () => {
+    const interval = 3600000 // 1 hour
+    const originalScheduledTime = Date.now() - 5400000 // 1.5 hours ago
+    
+    const reminder: Reminder = {
+      id: "rem-missed-cadence",
+      sessionID: "ses-test",
+      projectID: "test-project-123",
+      type: "recurring",
+      interval,
+      originalPrompt: "test",
+      userDescription: "Missed cadence test",
+      time: {
+        created: Date.now() - 7200000, // 2 hours ago
+        nextExecution: originalScheduledTime,
+      },
+      status: "active",
+    }
+
+    state.reminders.set(reminder.id, reminder)
+    await scheduleTimer(reminder, ctx, state)
+
+    // Should schedule for next interval from the original time, not from now
+    // Original: now - 1.5h, interval: 1h, missed: 2 intervals
+    // Next should be: (now - 1.5h) + (2 * 1h) = now + 0.5h
+    const expectedNext = originalScheduledTime + (2 * interval)
+    const actualNext = reminder.time.nextExecution
+    
+    // Allow 100ms tolerance for test execution time
+    expect(Math.abs(actualNext - expectedNext)).toBeLessThan(100)
+    
+    // Verify the delay is approximately 30 minutes (half an hour from now)
+    const now = Date.now()
+    const delay = actualNext - now
+    expect(delay).toBeGreaterThan(1700000) // ~28 minutes
+    expect(delay).toBeLessThan(1900000) // ~32 minutes
+  })
 })

@@ -8,12 +8,32 @@ export async function scheduleTimer(reminder: Reminder, ctx: PluginInput, state:
     clearTimeout(existingTimer)
   }
 
-  const delay = Math.max(0, reminder.time.nextExecution - Date.now())
+  const now = Date.now()
+  let delay = reminder.time.nextExecution - now
+
+  // Handle missed execution windows for recurring reminders
+  if (delay < 0 && reminder.type === "recurring") {
+    // Calculate how many intervals were missed
+    const missedIntervals = Math.ceil(Math.abs(delay) / reminder.interval)
+    // Schedule for next interval from the original scheduled time to maintain cadence
+    reminder.time.nextExecution = reminder.time.nextExecution + (missedIntervals * reminder.interval)
+    delay = reminder.time.nextExecution - now
+    await saveReminder(reminder, ctx)
+    console.log(
+      `[RemindersPlugin] Skipped ${missedIntervals} missed execution(s) for recurring reminder ${reminder.id}`,
+    )
+  } else {
+    // For one-time reminders or on-time recurring, use the scheduled time
+    delay = Math.max(0, delay)
+  }
 
   const timer = setTimeout(async () => {
     state.timers.delete(reminder.id)
     await executeReminder(reminder, ctx, state)
   }, delay)
+
+  // CRITICAL: Allow process to exit even with active timers
+  timer.unref()
 
   state.timers.set(reminder.id, timer)
 

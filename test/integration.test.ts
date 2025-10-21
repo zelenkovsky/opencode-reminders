@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test"
-import { RemindersPlugin } from "../index"
+import RemindersPlugin from "../index"
 import type { PluginInput } from "@opencode-ai/plugin"
 import { $ } from "bun"
 
