@@ -78,10 +78,12 @@ const RemindersPlugin: Plugin = async (ctx) => {
     `[RemindersPlugin] Timer persistence validation completed: ${storedReminders.length} total, ${restoredCount} restored, ${expiredCount} expired, ${invalidCount} invalid, ${healthyCount} healthy`,
   )
 
-  // No explicit cleanup needed:
-  // - timer.unref() allows clean exit without blocking
-  // - Timers will be naturally garbage collected on process exit
-  // - Reminder state persists to storage for restoration on next startup
+  // Cleanup considerations:
+  // - timer.unref() allows clean exit without blocking the process
+  // - Plugin API currently has no cleanup hook for graceful shutdown
+  // - On hot-reload, old timers may fire once but won't be rescheduled (state is in new instance)
+  // - Reminder state persists to storage and is restored on next startup
+  // - Max reminders per project (50) bounds memory usage
 
   return {
     async config(cfg) {
