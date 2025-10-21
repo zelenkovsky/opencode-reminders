@@ -23,3 +23,12 @@ export type State = {
   timers: Map<string, NodeJS.Timeout>
   projectID: string
 }
+
+export type PluginConfig = {
+  enabled: boolean
+  max_reminders_per_project: number
+  min_interval_seconds: number
+  notifications: {
+    enabled: boolean
+  }
+}

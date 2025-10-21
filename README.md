@@ -123,7 +123,7 @@ bun test test/integration.test.ts
 bun test --watch
 ```
 
-**Test Coverage:** 35+ tests covering types, storage, scheduling, and integration.
+**Test Coverage:** 46 tests covering types, storage, scheduling, and integration.
 
 ## Architecture
 

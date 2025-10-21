@@ -1,5 +1,5 @@
 import { tool, type PluginInput } from "@opencode-ai/plugin"
-import type { Reminder, State } from "../types"
+import type { Reminder, State, PluginConfig } from "../types"
 import { saveReminder } from "../storage"
 import { scheduleTimer } from "../scheduler"
 import DESCRIPTION from "./reminderadd.txt"
@@ -8,7 +8,7 @@ import { logger } from "../logger"
 export function createReminderAddTool(
   ctx: PluginInput,
   state: State,
-  getConfig: () => { max_reminders_per_project: number },
+  getConfig: () => PluginConfig,
 ) {
   return tool({
     description: DESCRIPTION,
@@ -23,7 +23,8 @@ export function createReminderAddTool(
     },
 
     async execute(args, context) {
-      const maxReminders = getConfig().max_reminders_per_project
+      const config = getConfig()
+      const maxReminders = config.max_reminders_per_project
       const existingCount = Array.from(state.reminders.values()).filter(
         (r) => r.sessionID === context.sessionID,
       ).length
@@ -50,7 +51,7 @@ export function createReminderAddTool(
 
       state.reminders.set(reminder.id, reminder)
       await saveReminder(reminder, ctx)
-      await scheduleTimer(reminder, ctx, state)
+      await scheduleTimer(reminder, ctx, state, config)
 
       logger.info(`[RemindersPlugin] Created ${args.type} reminder ${reminder.id}: ${args.description}`)
 

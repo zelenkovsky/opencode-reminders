@@ -1,6 +1,6 @@
 import { Plugin } from "@opencode-ai/plugin"
 import { logger } from "./logger"
-import type { State } from "./types"
+import type { State, PluginConfig } from "./types"
 import { ReminderSchema } from "./types"
 import { getStorageDir, deleteReminder, listReminders } from "./storage"
 import { scheduleTimer, cancelReminder } from "./scheduler"
@@ -9,7 +9,7 @@ import { createReminderListTool } from "./tools/reminderlist"
 import { createReminderRemoveTool } from "./tools/reminderremove"
 
 const RemindersPlugin: Plugin = async (ctx) => {
-  const { client, project } = ctx
+  const { project } = ctx
 
   logger.info(`[RemindersPlugin] Initializing for project ${project.id}`)
 
@@ -22,10 +22,13 @@ const RemindersPlugin: Plugin = async (ctx) => {
   }
 
   // Configuration with defaults
-  let config = {
+  let config: PluginConfig = {
     enabled: true,
     max_reminders_per_project: 50,
     min_interval_seconds: 30,
+    notifications: {
+      enabled: true,
+    },
   }
 
   const gracePeriod = 60 * 60 * 1000
@@ -52,7 +55,7 @@ const RemindersPlugin: Plugin = async (ctx) => {
       }
 
       state.reminders.set(reminder.id, reminder)
-      await scheduleTimer(reminder, ctx, state)
+      await scheduleTimer(reminder, ctx, state, config)
 
       // Validate timer was actually created (timer health validation)
       const isHealthy = state.timers.has(reminder.id)

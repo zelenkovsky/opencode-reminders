@@ -1,6 +1,6 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test"
 import { scheduleTimer, executeReminder, cancelReminder } from "../scheduler"
-import type { Reminder, State } from "../types"
+import type { Reminder, State, PluginConfig } from "../types"
 import type { PluginInput } from "@opencode-ai/plugin"
 import { $ } from "bun"
 
@@ -11,6 +11,9 @@ async function createMockContext(tmpDir: string): Promise<PluginInput> {
         prompt: async () => ({ data: {} as any, error: undefined, response: {} as any }),
         get: async () => ({ data: { id: "ses-test" } as any, error: undefined, response: {} as any }),
       },
+      tui: {
+        showToast: async () => {}
+      }
     } as any,
     project: {
       id: "test-project-123",
@@ -23,10 +26,22 @@ async function createMockContext(tmpDir: string): Promise<PluginInput> {
   }
 }
 
+function createMockConfig(): PluginConfig {
+  return {
+    enabled: true,
+    max_reminders_per_project: 10,
+    min_interval_seconds: 30,
+    notifications: {
+      enabled: true
+    }
+  }
+}
+
 describe("Scheduler", () => {
   let tmpDir: string
   let ctx: PluginInput
   let state: State
+  let config: PluginConfig
 
   beforeEach(async () => {
     tmpDir = await $`mktemp -d`.text().then((t) => t.trim())
@@ -36,6 +51,7 @@ describe("Scheduler", () => {
       timers: new Map(),
       projectID: "test-project-123",
     }
+    config = createMockConfig()
   })
 
   afterEach(async () => {
@@ -62,7 +78,7 @@ describe("Scheduler", () => {
     }
 
     state.reminders.set(reminder.id, reminder)
-    await scheduleTimer(reminder, ctx, state)
+    await scheduleTimer(reminder, ctx, state, config)
 
     expect(state.timers.has(reminder.id)).toBe(true)
   })
@@ -84,13 +100,13 @@ describe("Scheduler", () => {
     }
 
     state.reminders.set(reminder.id, reminder)
-    await scheduleTimer(reminder, ctx, state)
+    await scheduleTimer(reminder, ctx, state, config)
 
     const firstTimer = state.timers.get(reminder.id)
     expect(firstTimer).toBeDefined()
 
     reminder.time.nextExecution = Date.now() + 20000
-    await scheduleTimer(reminder, ctx, state)
+    await scheduleTimer(reminder, ctx, state, config)
 
     const secondTimer = state.timers.get(reminder.id)
     expect(secondTimer).toBeDefined()
@@ -114,7 +130,7 @@ describe("Scheduler", () => {
     }
 
     state.reminders.set(reminder.id, reminder)
-    await scheduleTimer(reminder, ctx, state)
+    await scheduleTimer(reminder, ctx, state, config)
 
     expect(state.timers.has(reminder.id)).toBe(true)
     expect(state.reminders.has(reminder.id)).toBe(true)
@@ -136,7 +152,7 @@ describe("Scheduler", () => {
     let promptCalled = false
     let capturedPrompt = ""
 
-    ctx.client.session.prompt = async (opts: any) => {
+    ;(ctx.client.session.prompt as any) = async (opts: any) => {
       promptCalled = true
       capturedPrompt = opts.body?.parts?.[0]?.text || ""
       return { data: {} as any, error: undefined, response: {} as any }
@@ -158,7 +174,7 @@ describe("Scheduler", () => {
     }
 
     state.reminders.set(reminder.id, reminder)
-    await executeReminder(reminder, ctx, state)
+    await executeReminder(reminder, ctx, state, config)
 
     await new Promise((resolve) => setTimeout(resolve, 50))
 
@@ -184,7 +200,7 @@ describe("Scheduler", () => {
 
     state.reminders.set(reminder.id, reminder)
     const before = Date.now()
-    await executeReminder(reminder, ctx, state)
+    await executeReminder(reminder, ctx, state, config)
     const after = Date.now()
 
     expect(reminder.time.lastExecution).toBeGreaterThanOrEqual(before)
@@ -208,7 +224,7 @@ describe("Scheduler", () => {
     }
 
     state.reminders.set(reminder.id, reminder)
-    await executeReminder(reminder, ctx, state)
+    await executeReminder(reminder, ctx, state, config)
 
     await new Promise((resolve) => setTimeout(resolve, 50))
 
@@ -233,7 +249,7 @@ describe("Scheduler", () => {
 
     const oldNextExecution = reminder.time.nextExecution
     state.reminders.set(reminder.id, reminder)
-    await executeReminder(reminder, ctx, state)
+    await executeReminder(reminder, ctx, state, config)
 
     await new Promise((resolve) => setTimeout(resolve, 50))
 
@@ -263,7 +279,7 @@ describe("Scheduler", () => {
     }
 
     state.reminders.set(reminder.id, reminder)
-    await scheduleTimer(reminder, ctx, state)
+    await scheduleTimer(reminder, ctx, state, config)
 
     // Should schedule for next interval from the original time, not from now
     // Original: now - 1.5h, interval: 1h, missed: 2 intervals

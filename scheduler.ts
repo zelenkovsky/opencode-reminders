@@ -1,9 +1,14 @@
 import type { PluginInput } from "@opencode-ai/plugin"
-import type { Reminder, State } from "./types"
+import type { Reminder, State, PluginConfig } from "./types"
 import { saveReminder, deleteReminder } from "./storage"
 import { logger } from "./logger"
 
-export async function scheduleTimer(reminder: Reminder, ctx: PluginInput, state: State): Promise<void> {
+export async function scheduleTimer(
+  reminder: Reminder,
+  ctx: PluginInput,
+  state: State,
+  config: PluginConfig,
+): Promise<void> {
   const existingTimer = state.timers.get(reminder.id)
   if (existingTimer) {
     clearTimeout(existingTimer)
@@ -30,7 +35,7 @@ export async function scheduleTimer(reminder: Reminder, ctx: PluginInput, state:
 
   const timer = setTimeout(async () => {
     state.timers.delete(reminder.id)
-    await executeReminder(reminder, ctx, state)
+    await executeReminder(reminder, ctx, state, config)
   }, delay)
 
   // CRITICAL: Allow process to exit even with active timers
@@ -41,7 +46,12 @@ export async function scheduleTimer(reminder: Reminder, ctx: PluginInput, state:
   logger.info(`Scheduled reminder ${reminder.id} to execute in ${Math.round(delay / 1000)}s`)
 }
 
-export async function executeReminder(reminder: Reminder, ctx: PluginInput, state: State): Promise<void> {
+export async function executeReminder(
+  reminder: Reminder,
+  ctx: PluginInput,
+  state: State,
+  config: PluginConfig,
+): Promise<void> {
   logger.info(`Executing reminder ${reminder.id}: ${reminder.userDescription}`)
 
   try {
@@ -63,21 +73,53 @@ export async function executeReminder(reminder: Reminder, ctx: PluginInput, stat
       reminder.time.nextExecution = Date.now() + reminder.interval
       state.reminders.set(reminder.id, reminder)
       await saveReminder(reminder, ctx)
-      await scheduleTimer(reminder, ctx, state)
+      await scheduleTimer(reminder, ctx, state, config)
       logger.info(`Recurring reminder ${reminder.id} rescheduled`)
+      
+      if (config.notifications.enabled) {
+        await ctx.client.tui.showToast({
+          body: {
+            message: `Reminder executed: ${reminder.userDescription}`,
+            variant: "success",
+          },
+        })
+      }
     } else {
       await cancelReminder(reminder.id, ctx, state)
       logger.info(`One-time reminder ${reminder.id} completed and removed`)
+
+      if (config.notifications.enabled) {
+        await ctx.client.tui.showToast({
+          body: {
+            message: `Reminder completed: ${reminder.userDescription}`,
+            variant: "success",
+          },
+        })
+      }
     }
   } catch (error: any) {
     logger.error(`Reminder ${reminder.id} execution failed:`, error)
+
+    if (config.notifications.enabled) {
+      try {
+        await ctx.client.tui.showToast({
+          body: {
+            title: "Reminder Failed",
+            message: reminder.userDescription,
+            variant: "error",
+          },
+        })
+      } catch (notificationError) {
+        logger.error(`Failed to show error notification for reminder ${reminder.id}:`, notificationError)
+      }
+    }
 
     if (error?.name === "MessageAbortedError") {
       if (reminder.type === "recurring") {
         reminder.time.nextExecution = Date.now() + reminder.interval
         state.reminders.set(reminder.id, reminder)
         await saveReminder(reminder, ctx)
-        await scheduleTimer(reminder, ctx, state)
+        await scheduleTimer(reminder, ctx, state, config)
         logger.info(`Recurring reminder ${reminder.id} rescheduled after abort`)
       } else {
         await cancelReminder(reminder.id, ctx, state)
