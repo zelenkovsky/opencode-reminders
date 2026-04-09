@@ -1,6 +1,6 @@
 {
   "name": "opencode-reminders",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Reminder plugin for OpenCode - schedule actions to run at intervals",
   "keywords": ["opencode", "reactive", "plugin", "reminders", "scheduler"],
   "author": "zelenkovsky",
@@ -38,8 +38,8 @@
     "test:watch": "bun test --watch"
   },
   "dependencies": {
-    "@opencode-ai/plugin": "^0.15.7",
-    "@opencode-ai/sdk": "^0.15.7",
+    "@opencode-ai/plugin": "^1.4.0",
+    "@opencode-ai/sdk": "^1.4.0",
     "zod": "^4.1.8"
   },
   "devDependencies": {

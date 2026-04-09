@@ -14,6 +14,7 @@ async function createMockContext(tmpDir: string): Promise<PluginInput> {
     },
     directory: tmpDir,
     worktree: tmpDir,
+    serverUrl: new URL("http://localhost:3000"),
     $: $,
   }
 }

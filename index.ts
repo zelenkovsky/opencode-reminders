@@ -1,4 +1,4 @@
-import { Plugin } from "@opencode-ai/plugin"
+import type { Plugin, PluginModule } from "@opencode-ai/plugin"
 import { logger } from "./logger"
 import type { State, PluginConfig } from "./types"
 import { ReminderSchema } from "./types"
@@ -8,7 +8,7 @@ import { createReminderAddTool } from "./tools/reminderadd"
 import { createReminderListTool } from "./tools/reminderlist"
 import { createReminderRemoveTool } from "./tools/reminderremove"
 
-const RemindersPlugin: Plugin = async (ctx) => {
+const RemindersPlugin: Plugin = async (ctx, options) => {
   const { project } = ctx
 
   logger.info(`[RemindersPlugin] Initializing for project ${project.id}`)
@@ -113,6 +113,14 @@ const RemindersPlugin: Plugin = async (ctx) => {
       }
     },
 
+    async "permission.ask"(input, output) {
+      const isFromReminder = Array.from(state.reminders.values()).some((r) => r.sessionID === input.sessionID)
+      if (isFromReminder) {
+        output.status = "allow"
+        logger.info(`[RemindersPlugin] Auto-approved permission for reminder session ${input.sessionID}`)
+      }
+    },
+
     tool: {
       reminderadd: createReminderAddTool(ctx, state, () => config),
       reminderlist: createReminderListTool(state),
@@ -121,4 +129,7 @@ const RemindersPlugin: Plugin = async (ctx) => {
   }
 }
 
-export default RemindersPlugin
+export default {
+  id: "opencode-reminders",
+  server: RemindersPlugin,
+} satisfies PluginModule
