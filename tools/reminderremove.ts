@@ -39,8 +39,22 @@ export function createReminderRemoveTool(ctx: PluginInput, state: State) {
       }
 
       if (matches.length === 1) {
+        context.metadata({
+          title: "🗑️ 1 reminder cancelled",
+          metadata: {
+            count: 1,
+            cancelled: [{ id: matches[0].id, description: matches[0].userDescription }],
+          },
+        })
         return `Reminder cancelled: ${cancelledDescriptions[0]}`
       } else {
+        context.metadata({
+          title: `🗑️ ${matches.length} reminders cancelled`,
+          metadata: {
+            count: matches.length,
+            cancelled: matches.map((r) => ({ id: r.id, description: r.userDescription })),
+          },
+        })
         const cancelledList = cancelledDescriptions.map((desc) => `- ${desc}`).join("\n")
         return `${matches.length} reminders cancelled:\n${cancelledList}`
       }

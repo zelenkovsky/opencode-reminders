@@ -1,7 +1,20 @@
 import { test, expect, describe } from "bun:test"
 import RemindersPlugin from "../index"
-import type { PluginInput } from "@opencode-ai/plugin"
+import type { PluginInput, ToolContext } from "@opencode-ai/plugin"
 import { $ } from "bun"
+
+function createMockToolContext(sessionID: string): ToolContext {
+  return {
+    sessionID,
+    messageID: `msg-${sessionID}`,
+    agent: "test-agent",
+    directory: "/tmp",
+    worktree: "/tmp",
+    abort: new AbortController().signal,
+    metadata: () => {},
+    ask: async () => {},
+  }
+}
 
 async function createMockContext(tmpDir: string): Promise<PluginInput> {
   return {
@@ -18,6 +31,7 @@ async function createMockContext(tmpDir: string): Promise<PluginInput> {
     },
     directory: tmpDir,
     worktree: tmpDir,
+    serverUrl: new URL("http://localhost:3000"),
     $: $,
   }
 }
@@ -25,12 +39,13 @@ async function createMockContext(tmpDir: string): Promise<PluginInput> {
 describe("Configuration Tests", () => {
   let tmpDir: string
   let ctx: PluginInput
+  const pluginModule = RemindersPlugin
 
   test("config hook updates max reminders", async () => {
     tmpDir = await $`mktemp -d`.text().then((t) => t.trim())
     ctx = await createMockContext(tmpDir)
 
-    const plugin = await RemindersPlugin(ctx)
+    const plugin = await pluginModule.server(ctx)
 
     // Test default config
     const result1 = await plugin.tool!.reminderadd.execute(
@@ -40,7 +55,7 @@ describe("Configuration Tests", () => {
         action_prompt: "test",
         description: "Test 1",
       },
-      { sessionID: "ses-config-test" } as any,
+      createMockToolContext("ses-config-test"),
     )
     expect(result1).toContain("Reminder set")
 
@@ -55,7 +70,7 @@ describe("Configuration Tests", () => {
         action_prompt: "test 2",
         description: "Test 2",
       },
-      { sessionID: "ses-config-test" } as any,
+      createMockToolContext("ses-config-test"),
     )
     expect(result2).toContain("too many reminders")
     expect(result2).toContain("1/1")
@@ -89,7 +104,7 @@ describe("Configuration Tests", () => {
     await Bun.write(`${storageDir}/test-health-check.json`, JSON.stringify(reminder))
 
     // Initialize plugin - should restore and validate
-    const plugin = await RemindersPlugin(ctx)
+    const plugin = await pluginModule.server(ctx)
 
     // Check logs for health validation
     // Since we can't easily check internal state, just verify no crash

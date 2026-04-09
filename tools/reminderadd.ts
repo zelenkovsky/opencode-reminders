@@ -55,6 +55,17 @@ export function createReminderAddTool(
 
       logger.info(`[RemindersPlugin] Created ${args.type} reminder ${reminder.id}: ${args.description}`)
 
+      context.metadata({
+        title: `${args.type === "one-time" ? "⏰ One-time" : "🔄 Recurring"} reminder set`,
+        metadata: {
+          reminderID: reminder.id,
+          description: args.description,
+          type: args.type,
+          intervalSeconds: args.interval_seconds,
+          nextExecutionIn: args.interval_seconds,
+        },
+      })
+
       return `Reminder set: ${args.description} (${args.type === "one-time" ? "in" : "every"} ${args.interval_seconds} seconds)`
     },
   })

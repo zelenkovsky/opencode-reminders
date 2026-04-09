@@ -1,7 +1,20 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test"
 import RemindersPlugin from "../index"
-import type { PluginInput } from "@opencode-ai/plugin"
+import type { PluginInput, ToolContext } from "@opencode-ai/plugin"
 import { $ } from "bun"
+
+function createMockToolContext(sessionID: string): ToolContext {
+  return {
+    sessionID,
+    messageID: `msg-${sessionID}`,
+    agent: "test-agent",
+    directory: "/tmp",
+    worktree: "/tmp",
+    abort: new AbortController().signal,
+    metadata: () => {},
+    ask: async () => {},
+  }
+}
 
 async function createMockContext(tmpDir: string): Promise<PluginInput> {
   const sessions = new Map<string, any>()
@@ -30,6 +43,7 @@ async function createMockContext(tmpDir: string): Promise<PluginInput> {
     },
     directory: tmpDir,
     worktree: tmpDir,
+    serverUrl: new URL("http://localhost:3000"),
     $: $,
   }
 }
@@ -48,7 +62,7 @@ describe("Integration Tests", () => {
   })
 
   test("plugin initializes successfully", async () => {
-    const plugin = await RemindersPlugin(ctx)
+    const plugin = await RemindersPlugin.server(ctx)
 
     expect(plugin).toBeDefined()
     expect(plugin.tool).toBeDefined()
@@ -56,7 +70,7 @@ describe("Integration Tests", () => {
   })
 
   test("plugin exposes three tools", async () => {
-    const plugin = await RemindersPlugin(ctx)
+    const plugin = await RemindersPlugin.server(ctx)
 
     expect(plugin.tool?.reminderadd).toBeDefined()
     expect(plugin.tool?.reminderlist).toBeDefined()
@@ -64,7 +78,7 @@ describe("Integration Tests", () => {
   })
 
   test("reminderadd tool creates reminder", async () => {
-    const plugin = await RemindersPlugin(ctx)
+    const plugin = await RemindersPlugin.server(ctx)
 
     const result = await plugin.tool!.reminderadd.execute(
       {
@@ -73,7 +87,7 @@ describe("Integration Tests", () => {
         action_prompt: "check /workspace/test.txt for changes",
         description: "File change check",
       },
-      { sessionID: "ses-integration-test" } as any,
+      createMockToolContext("ses-integration-test"),
     )
 
     expect(result).toContain("Reminder set")
@@ -81,15 +95,15 @@ describe("Integration Tests", () => {
   })
 
   test("reminderlist tool returns empty for new session", async () => {
-    const plugin = await RemindersPlugin(ctx)
+    const plugin = await RemindersPlugin.server(ctx)
 
-    const result = await plugin.tool!.reminderlist.execute({}, { sessionID: "ses-new" } as any)
+    const result = await plugin.tool!.reminderlist.execute({}, createMockToolContext("ses-new"))
 
     expect(result).toContain("No active reminders")
   })
 
   test("reminderlist tool shows active reminders", async () => {
-    const plugin = await RemindersPlugin(ctx)
+    const plugin = await RemindersPlugin.server(ctx)
 
     await plugin.tool!.reminderadd.execute(
       {
@@ -98,10 +112,10 @@ describe("Integration Tests", () => {
         action_prompt: "test action",
         description: "Test recurring reminder",
       },
-      { sessionID: "ses-list-test" } as any,
+      createMockToolContext("ses-list-test"),
     )
 
-    const result = await plugin.tool!.reminderlist.execute({}, { sessionID: "ses-list-test" } as any)
+    const result = await plugin.tool!.reminderlist.execute({}, createMockToolContext("ses-list-test"))
 
     expect(result).toContain("Active reminders")
     expect(result).toContain("Test recurring reminder")
@@ -109,7 +123,7 @@ describe("Integration Tests", () => {
   })
 
   test("reminderremove tool cancels reminder", async () => {
-    const plugin = await RemindersPlugin(ctx)
+    const plugin = await RemindersPlugin.server(ctx)
 
     await plugin.tool!.reminderadd.execute(
       {
@@ -118,23 +132,23 @@ describe("Integration Tests", () => {
         action_prompt: "test",
         description: "Reminder to remove",
       },
-      { sessionID: "ses-remove-test" } as any,
+      createMockToolContext("ses-remove-test"),
     )
 
     const removeResult = await plugin.tool!.reminderremove.execute(
       { description_pattern: "remove" },
-      { sessionID: "ses-remove-test" } as any,
+      createMockToolContext("ses-remove-test"),
     )
 
     expect(removeResult).toContain("Reminder cancelled")
 
-    const listResult = await plugin.tool!.reminderlist.execute({}, { sessionID: "ses-remove-test" } as any)
+    const listResult = await plugin.tool!.reminderlist.execute({}, createMockToolContext("ses-remove-test"))
 
     expect(listResult).toContain("No active reminders")
   })
 
   test("reminderadd enforces 30 second minimum interval", async () => {
-    const plugin = await RemindersPlugin(ctx)
+    const plugin = await RemindersPlugin.server(ctx)
 
     try {
       await plugin.tool!.reminderadd.execute(
@@ -144,7 +158,7 @@ describe("Integration Tests", () => {
           action_prompt: "test",
           description: "Too short interval",
         },
-        { sessionID: "ses-min-interval" } as any,
+        createMockToolContext("ses-min-interval"),
       )
       expect.unreachable("Should have thrown error for interval < 30")
     } catch (error: any) {
@@ -153,7 +167,7 @@ describe("Integration Tests", () => {
   })
 
   test("reminderadd respects max reminders limit", async () => {
-    const plugin = await RemindersPlugin(ctx)
+    const plugin = await RemindersPlugin.server(ctx)
 
     for (let i = 0; i < 50; i++) {
       await plugin.tool!.reminderadd.execute(
@@ -163,7 +177,7 @@ describe("Integration Tests", () => {
           action_prompt: `test ${i}`,
           description: `Reminder ${i}`,
         },
-        { sessionID: "ses-max-limit" } as any,
+        createMockToolContext("ses-max-limit"),
       )
     }
 
@@ -174,7 +188,7 @@ describe("Integration Tests", () => {
         action_prompt: "test overflow",
         description: "Should fail",
       },
-      { sessionID: "ses-max-limit" } as any,
+      createMockToolContext("ses-max-limit"),
     )
 
     expect(result).toContain("too many reminders")
@@ -182,18 +196,18 @@ describe("Integration Tests", () => {
   })
 
   test("reminderremove handles no matches", async () => {
-    const plugin = await RemindersPlugin(ctx)
+    const plugin = await RemindersPlugin.server(ctx)
 
     const result = await plugin.tool!.reminderremove.execute(
       { description_pattern: "nonexistent" },
-      { sessionID: "ses-no-match" } as any,
+      createMockToolContext("ses-no-match"),
     )
 
     expect(result).toContain("No matching reminder found")
   })
 
   test("reminderremove handles multiple matches", async () => {
-    const plugin = await RemindersPlugin(ctx)
+    const plugin = await RemindersPlugin.server(ctx)
 
     await plugin.tool!.reminderadd.execute(
       {
@@ -202,7 +216,7 @@ describe("Integration Tests", () => {
         action_prompt: "test 1",
         description: "Check email notification",
       },
-      { sessionID: "ses-multi-match" } as any,
+      createMockToolContext("ses-multi-match"),
     )
 
     await plugin.tool!.reminderadd.execute(
@@ -212,12 +226,12 @@ describe("Integration Tests", () => {
         action_prompt: "test 2",
         description: "Check system notification",
       },
-      { sessionID: "ses-multi-match" } as any,
+      createMockToolContext("ses-multi-match"),
     )
 
     const result = await plugin.tool!.reminderremove.execute(
       { description_pattern: "notification" },
-      { sessionID: "ses-multi-match" } as any,
+      createMockToolContext("ses-multi-match"),
     )
 
     expect(result).toContain("2 reminders cancelled")
@@ -226,7 +240,7 @@ describe("Integration Tests", () => {
   })
 
   test("event handler cleans up reminders on session deletion", async () => {
-    const plugin = await RemindersPlugin(ctx)
+    const plugin = await RemindersPlugin.server(ctx)
 
     await plugin.tool!.reminderadd.execute(
       {
@@ -235,10 +249,10 @@ describe("Integration Tests", () => {
         action_prompt: "test",
         description: "Session cleanup test",
       },
-      { sessionID: "ses-cleanup" } as any,
+      createMockToolContext("ses-cleanup"),
     )
 
-    let listBefore = await plugin.tool!.reminderlist.execute({}, { sessionID: "ses-cleanup" } as any)
+    let listBefore = await plugin.tool!.reminderlist.execute({}, createMockToolContext("ses-cleanup"))
     expect(listBefore).toContain("Session cleanup test")
 
     await plugin.event!({
@@ -250,7 +264,7 @@ describe("Integration Tests", () => {
       } as any,
     })
 
-    let listAfter = await plugin.tool!.reminderlist.execute({}, { sessionID: "ses-cleanup" } as any)
+    let listAfter = await plugin.tool!.reminderlist.execute({}, createMockToolContext("ses-cleanup"))
     expect(listAfter).toContain("No active reminders")
   })
 })
