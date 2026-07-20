@@ -1,8 +1,25 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test"
-import { scheduleTimer, executeReminder, cancelReminder } from "../scheduler"
+import {
+  beginSchedulerGeneration,
+  scheduleTimer,
+  executeReminder,
+  cancelReminder,
+  deleteStoredReminder,
+} from "../scheduler"
 import type { Reminder, State, PluginConfig } from "../types"
 import type { PluginInput } from "@opencode-ai/plugin"
 import { $ } from "bun"
+import { loadReminder, saveReminder } from "../storage"
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
 
 async function createMockContext(tmpDir: string): Promise<PluginInput> {
   return {
@@ -148,6 +165,33 @@ describe("Scheduler", () => {
     expect(state.reminders.size).toBe(0)
   })
 
+  test("successful cancellation retires its tombstone", async () => {
+    const reminder: Reminder = {
+      id: "rem-tombstone-retirement",
+      sessionID: "ses-test",
+      projectID: "test-project-123",
+      type: "one-time",
+      interval: 5000,
+      originalPrompt: "test",
+      userDescription: "Tombstone retirement test",
+      time: {
+        created: Date.now(),
+        nextExecution: Date.now() + 5000,
+      },
+      status: "active",
+    }
+
+    state.reminders.set(reminder.id, reminder)
+    await scheduleTimer(reminder, ctx, state, config)
+    await cancelReminder(reminder.id, ctx, state)
+
+    reminder.time.nextExecution = Date.now() + 5000
+    state.reminders.set(reminder.id, reminder)
+    await scheduleTimer(reminder, ctx, state, config)
+
+    expect(state.timers.has(reminder.id)).toBe(true)
+  })
+
   test("executeReminder calls session prompt", async () => {
     let promptCalled = false
     let capturedPrompt = ""
@@ -257,6 +301,160 @@ describe("Scheduler", () => {
     expect(updatedReminder).toBeDefined()
     expect(updatedReminder!.time.nextExecution).toBeGreaterThanOrEqual(oldNextExecution)
     expect(state.timers.has(reminder.id)).toBe(true)
+  })
+
+  test("cancelReminder aborts an active execution without rescheduling it", async () => {
+    const promptStarted = deferred<AbortSignal>()
+    const finishPrompt = deferred()
+    const promptFinished = deferred()
+    ;(ctx.client.session.prompt as any) = async (opts: any) => {
+      promptStarted.resolve(opts.signal)
+      await finishPrompt.promise
+      promptFinished.resolve()
+      return { data: {} as any, error: undefined, response: {} as any }
+    }
+
+    const reminder: Reminder = {
+      id: "rem-active-cancel",
+      sessionID: "ses-test",
+      projectID: "test-project-123",
+      type: "recurring",
+      interval: 1000,
+      originalPrompt: "test",
+      userDescription: "Active cancellation test",
+      time: {
+        created: Date.now(),
+        nextExecution: Date.now() + 5,
+      },
+      status: "active",
+    }
+
+    state.reminders.set(reminder.id, reminder)
+    await saveReminder(reminder, ctx)
+    await scheduleTimer(reminder, ctx, state, config)
+
+    const signal = await promptStarted.promise
+    await cancelReminder(reminder.id, ctx, state)
+    finishPrompt.resolve()
+    await promptFinished.promise
+    await Bun.sleep(0)
+
+    expect(signal.aborted).toBe(true)
+    expect(state.reminders.has(reminder.id)).toBe(false)
+    expect(state.timers.has(reminder.id)).toBe(false)
+    expect(await loadReminder(reminder.id, ctx)).toBeNull()
+  })
+
+  test("a replacement plugin instance invalidates an active old execution", async () => {
+    const promptStarted = deferred<AbortSignal>()
+    const finishPrompt = deferred()
+    const promptFinished = deferred()
+    ;(ctx.client.session.prompt as any) = async (opts: any) => {
+      promptStarted.resolve(opts.signal)
+      await finishPrompt.promise
+      promptFinished.resolve()
+      return { data: {} as any, error: undefined, response: {} as any }
+    }
+
+    const reminder: Reminder = {
+      id: "rem-hot-reload",
+      sessionID: "ses-test",
+      projectID: "test-project-123",
+      type: "recurring",
+      interval: 1000,
+      originalPrompt: "test",
+      userDescription: "Hot reload test",
+      time: {
+        created: Date.now(),
+        nextExecution: Date.now() + 5,
+      },
+      status: "active",
+    }
+
+    state.reminders.set(reminder.id, reminder)
+    await saveReminder(reminder, ctx)
+    await scheduleTimer(reminder, ctx, state, config)
+    const oldSignal = await promptStarted.promise
+
+    const replacementState: State = {
+      reminders: new Map(),
+      timers: new Map(),
+      projectID: state.projectID,
+      generation: beginSchedulerGeneration(ctx),
+    }
+    const replacementReminder = structuredClone(reminder)
+    replacementReminder.time.nextExecution = Date.now() + 1000
+    replacementState.reminders.set(replacementReminder.id, replacementReminder)
+    await scheduleTimer(replacementReminder, ctx, replacementState, config)
+
+    finishPrompt.resolve()
+    await promptFinished.promise
+    await Bun.sleep(0)
+
+    expect(oldSignal.aborted).toBe(true)
+    expect(state.timers.has(reminder.id)).toBe(false)
+    expect(replacementState.timers.has(reminder.id)).toBe(true)
+    expect((await loadReminder(reminder.id, ctx))?.time.nextExecution).toBe(
+      replacementReminder.time.nextExecution,
+    )
+
+    await cancelReminder(reminder.id, ctx, replacementState)
+  })
+
+  test("a stale plugin generation cannot delete replacement persistence", async () => {
+    const reminder: Reminder = {
+      id: "rem-stale-delete",
+      sessionID: "ses-test",
+      projectID: "test-project-123",
+      type: "one-time",
+      interval: 1000,
+      originalPrompt: "test",
+      userDescription: "Stale delete test",
+      time: {
+        created: Date.now(),
+        nextExecution: Date.now() + 1000,
+      },
+      status: "active",
+    }
+
+    state.generation = beginSchedulerGeneration(ctx)
+    await saveReminder(reminder, ctx)
+
+    const replacementState: State = {
+      reminders: new Map([[reminder.id, reminder]]),
+      timers: new Map(),
+      projectID: state.projectID,
+      generation: beginSchedulerGeneration(ctx),
+    }
+    await deleteStoredReminder(reminder.id, ctx, state)
+
+    expect(await loadReminder(reminder.id, ctx)).toEqual(reminder)
+    await cancelReminder(reminder.id, ctx, replacementState)
+  })
+
+  test("beginSchedulerGeneration clears old future timers", async () => {
+    const reminder: Reminder = {
+      id: "rem-old-future-timer",
+      sessionID: "ses-test",
+      projectID: "test-project-123",
+      type: "one-time",
+      interval: 60000,
+      originalPrompt: "test",
+      userDescription: "Old future timer test",
+      time: {
+        created: Date.now(),
+        nextExecution: Date.now() + 60000,
+      },
+      status: "active",
+    }
+
+    state.reminders.set(reminder.id, reminder)
+    await scheduleTimer(reminder, ctx, state, config)
+    expect(state.timers.has(reminder.id)).toBe(true)
+
+    beginSchedulerGeneration(ctx)
+
+    expect(state.timers.has(reminder.id)).toBe(false)
   })
 
   test("scheduleTimer maintains cadence for missed recurring reminders", async () => {
