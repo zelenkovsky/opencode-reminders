@@ -22,6 +22,7 @@ export type State = {
   reminders: Map<string, Reminder>
   timers: Map<string, NodeJS.Timeout>
   projectID: string
+  generation?: string
 }
 
 export type PluginConfig = {

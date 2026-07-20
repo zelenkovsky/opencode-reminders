@@ -33,16 +33,20 @@ export function createReminderRemoveTool(ctx: PluginInput, state: State) {
       // Cancel all matching reminders
       const cancelledDescriptions: string[] = []
       for (const reminder of matches) {
-        await cancelReminder(reminder.id, ctx, state)
-        cancelledDescriptions.push(reminder.userDescription)
-        logger.info(`[RemindersPlugin] Cancelled reminder ${reminder.id} via user request`)
+        if (await cancelReminder(reminder.id, ctx, state)) {
+          cancelledDescriptions.push(reminder.userDescription)
+          logger.info(`[RemindersPlugin] Cancelled reminder ${reminder.id} via user request`)
+        }
       }
 
-      if (matches.length === 1) {
+      if (cancelledDescriptions.length === 0) {
+        return "Reminder scheduler reloaded while cancelling. Check active reminders before retrying."
+      }
+      if (cancelledDescriptions.length === 1) {
         return `Reminder cancelled: ${cancelledDescriptions[0]}`
       } else {
         const cancelledList = cancelledDescriptions.map((desc) => `- ${desc}`).join("\n")
-        return `${matches.length} reminders cancelled:\n${cancelledList}`
+        return `${cancelledDescriptions.length} reminders cancelled:\n${cancelledList}`
       }
     },
   })

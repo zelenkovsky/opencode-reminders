@@ -3,6 +3,16 @@ import RemindersPlugin from "../index"
 import type { PluginInput } from "@opencode-ai/plugin"
 import { $ } from "bun"
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  let reject!: (reason?: unknown) => void
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 async function createMockContext(tmpDir: string): Promise<PluginInput> {
   const sessions = new Map<string, any>()
 
@@ -78,6 +88,133 @@ describe("Integration Tests", () => {
 
     expect(result).toContain("Reminder set")
     expect(result).toContain("File change check")
+  })
+
+  test("replacement initialization drains an in-flight reminder save before restoring", async () => {
+    const plugin = await RemindersPlugin(ctx)
+    const writeStarted = deferred()
+    const allowWrite = deferred()
+    const originalWrite = Bun.write
+    let intercepted = false
+
+    ;(Bun as any).write = async (destination: unknown, input: unknown, options?: unknown) => {
+      if (!intercepted && typeof destination === "string" && destination.endsWith(".json")) {
+        intercepted = true
+        writeStarted.resolve()
+        await allowWrite.promise
+      }
+      return (originalWrite as any)(destination, input, options)
+    }
+
+    try {
+      const addPromise = plugin.tool!.reminderadd.execute(
+        {
+          interval_seconds: 60,
+          type: "one-time" as const,
+          action_prompt: "test generation handoff",
+          description: "Generation handoff reminder",
+        },
+        { sessionID: "ses-generation-handoff" } as any,
+      )
+      await writeStarted.promise
+
+      let replacementResolved = false
+      const replacementPromise = RemindersPlugin(ctx).then((replacement) => {
+        replacementResolved = true
+        return replacement
+      })
+      await Bun.sleep(10)
+      expect(replacementResolved).toBe(false)
+
+      allowWrite.resolve()
+      const [addResult, replacement] = await Promise.all([addPromise, replacementPromise])
+      expect(addResult).toContain("scheduler reloaded")
+
+      const listResult = await replacement.tool!.reminderlist.execute(
+        {},
+        { sessionID: "ses-generation-handoff" } as any,
+      )
+      expect(listResult).toContain("Generation handoff reminder")
+
+      await replacement.tool!.reminderremove.execute(
+        { description_pattern: "Generation handoff" },
+        { sessionID: "ses-generation-handoff" } as any,
+      )
+    } finally {
+      allowWrite.resolve()
+      ;(Bun as any).write = originalWrite
+    }
+  })
+
+  test("a stale reminderremove tool cancels the replacement generation reminder", async () => {
+    const stalePlugin = await RemindersPlugin(ctx)
+    await stalePlugin.tool!.reminderadd.execute(
+      {
+        interval_seconds: 60,
+        type: "recurring" as const,
+        action_prompt: "test stale cancellation",
+        description: "Stale generation cancellation",
+      },
+      { sessionID: "ses-stale-cancellation" } as any,
+    )
+
+    const replacement = await RemindersPlugin(ctx)
+    const removeResult = await stalePlugin.tool!.reminderremove.execute(
+      { description_pattern: "Stale generation" },
+      { sessionID: "ses-stale-cancellation" } as any,
+    )
+    expect(removeResult).toContain("Reminder cancelled")
+
+    const listResult = await replacement.tool!.reminderlist.execute(
+      {},
+      { sessionID: "ses-stale-cancellation" } as any,
+    )
+    expect(listResult).toContain("No active reminders")
+  })
+
+  test("startup preserves a stored reminder when advancing its missed schedule cannot be persisted", async () => {
+    const plugin = await RemindersPlugin(ctx)
+    await plugin.tool!.reminderadd.execute(
+      {
+        interval_seconds: 60,
+        type: "recurring" as const,
+        action_prompt: "test startup persistence failure",
+        description: "Startup persistence failure",
+      },
+      { sessionID: "ses-startup-persistence" } as any,
+    )
+
+    const storageDir = `${tmpDir}/.opencode/reminders/test-project-integration`
+    const files: string[] = []
+    for await (const file of new Bun.Glob("*.json").scan({ cwd: storageDir, absolute: true })) {
+      files.push(file)
+    }
+    expect(files).toHaveLength(1)
+    const stored = await Bun.file(files[0]).json()
+    stored.time.nextExecution = Date.now() - 1000
+    await Bun.write(files[0], JSON.stringify(stored, null, 2))
+
+    const originalWrite = Bun.write
+    ;(Bun as any).write = async (destination: unknown, input: unknown, options?: unknown) => {
+      if (typeof destination === "string" && destination.endsWith(".json")) {
+        throw new Error("simulated reminder write failure")
+      }
+      return (originalWrite as any)(destination, input, options)
+    }
+
+    try {
+      const replacement = await RemindersPlugin(ctx)
+      const listResult = await replacement.tool!.reminderlist.execute(
+        {},
+        { sessionID: "ses-startup-persistence" } as any,
+      )
+      expect(listResult).toContain("No active reminders")
+    } finally {
+      ;(Bun as any).write = originalWrite
+    }
+
+    expect(await Bun.file(files[0]).exists()).toBe(true)
+    expect((await Bun.file(files[0]).json()).id).toBe(stored.id)
   })
 
   test("reminderlist tool returns empty for new session", async () => {
