@@ -23,6 +23,7 @@
     "types.ts",
     "storage.ts",
     "scheduler.ts",
+    "leases.ts",
     "logger.ts",
     "tools/",
     "README.md"
