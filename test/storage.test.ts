@@ -67,6 +67,28 @@ describe("Storage", () => {
     expect(content).toEqual(reminder)
   })
 
+  test("saveReminder atomically replaces JSON and removes its temporary file", async () => {
+    const reminder: Reminder = {
+      id: "rem-atomic",
+      sessionID: "ses-atomic",
+      projectID: "test-project-123",
+      type: "recurring",
+      interval: 5000,
+      originalPrompt: "atomic",
+      userDescription: "Atomic reminder",
+      time: { created: Date.now(), nextExecution: Date.now() + 5000 },
+      status: "active",
+    }
+    await saveReminder(reminder, ctx)
+    const updated = { ...reminder, time: { ...reminder.time, nextExecution: reminder.time.nextExecution + 1 } }
+    await saveReminder(updated, ctx)
+
+    const dir = await getStorageDir(ctx)
+    expect(await Bun.file(`${dir}/rem-atomic.json`).json()).toEqual(updated)
+    const temporaryFiles = await Array.fromAsync(new Bun.Glob("*.tmp").scan({ cwd: dir }))
+    expect(temporaryFiles).toHaveLength(0)
+  })
+
   test("loadReminder reads existing file", async () => {
     const reminder: Reminder = {
       id: "rem-load-test",
@@ -92,6 +114,12 @@ describe("Storage", () => {
   test("loadReminder returns null for non-existent file", async () => {
     const loaded = await loadReminder("non-existent", ctx)
     expect(loaded).toBeNull()
+  })
+
+  test("loadReminder propagates malformed JSON instead of treating it as absent", async () => {
+    const dir = await getStorageDir(ctx)
+    await Bun.write(`${dir}/rem-malformed.json`, "{")
+    await expect(loadReminder("rem-malformed", ctx)).rejects.toThrow()
   })
 
   test("deleteReminder removes file", async () => {

@@ -65,6 +65,34 @@ OpenCode will automatically load the plugin when you start the TUI.
 3. **Execution** - Sends prompt to session when timer fires
 4. **Cleanup** - Removes reminders when session deleted
 
+## Multi-Process Semantics
+
+When independent OpenCode server processes load the same reminder directory on one host, an
+occurrence lease prevents them from submitting the same prompt concurrently. Leases and reminder
+JSON updates use same-directory atomic filesystem operations. A losing process keeps an unref'd
+reconciliation timer, reloads durable state, and schedules the winner's next recurring occurrence.
+Post-prompt recurrence updates and every plugin cancellation/restore cleanup share a short-lived
+per-reminder mutation lock, so the durable read-and-transition cannot race a deletion. The lock is
+not held while the prompt API runs.
+
+This is deliberately not a claim of crash-proof exactly-once delivery. Any process, storage, or lock
+failure after the prompt API accepts a request but before its durable transition can lead to retry.
+That is at-least-once crash semantics; true exactly-once delivery requires idempotency support in the
+prompt API. Likewise, cancellation does not hold a lock across prompting: if an owner has already
+passed durable validation, a prompt can still be submitted even when cancellation returns first.
+The post-prompt durable transition remains fenced, so cancellation cannot intentionally resurrect or
+reschedule the reminder after deletion.
+
+The lease protocol assumes same-host processes and a local filesystem with atomic hard links,
+exclusive create, and rename. It is not intended to coordinate hosts or provide NFS/distributed
+filesystem safety. Linux detects a dead or reused PID using `/proc/<pid>/stat` process start time.
+Other platforms may acquire leases normally, but only reclaim a lease when `process.kill(pid, 0)`
+reports `ESRCH`; a reused PID is conservatively treated as live and can leave a stale lease until
+manual cleanup rather than risk a duplicate prompt.
+
+A stale `.recover` guard is never reclaimed automatically. This avoids a replacement race that could
+delete a live guard or lease, at the cost of manual cleanup after a recovery-process crash.
+
 ## Data Storage
 
 Reminders stored in:
