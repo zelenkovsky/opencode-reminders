@@ -1,4 +1,5 @@
-import { test, expect, describe, beforeEach, afterEach } from "bun:test"
+import { test, expect, describe, beforeEach, afterEach, spyOn } from "bun:test"
+import * as fsPromises from "node:fs/promises"
 import {
   beginSchedulerGeneration,
   waitForSchedulerMutations,
@@ -594,6 +595,55 @@ describe("Scheduler", () => {
     expect(await cleanupReminderSnapshot(snapshot, ctx, state, config)).toBe(false)
     expect((await loadReminder(snapshot.id, ctx))!.time.nextExecution).toBe(newer.time.nextExecution)
     expect(state.timers.has(snapshot.id)).toBe(true)
+  })
+
+  test("completed reconciliation read cannot resurrect state after cancellation returns", async () => {
+    const reminder: Reminder = {
+      id: "rem-reconcile-cancel-fence",
+      sessionID: "ses-test",
+      projectID: state.projectID,
+      type: "recurring",
+      interval: 60000,
+      originalPrompt: "must remain cancelled",
+      userDescription: "Reconciliation cancellation fence",
+      time: { created: Date.now(), nextExecution: Date.now() + 60000 },
+      status: "active",
+    }
+    state.reminders.set(reminder.id, reminder)
+    await saveReminder(reminder, ctx)
+    await scheduleTimer(reminder, ctx, state, config, { persist: false })
+
+    const readCompleted = deferred()
+    const releaseRead = deferred()
+    const readFile = fsPromises.readFile
+    let intercepted = false
+    const read = spyOn(fsPromises, "readFile").mockImplementation((async (...args: any[]) => {
+      const result = await (readFile as any)(...args)
+      if (!intercepted && String(args[0]).endsWith(`${reminder.id}.json`)) {
+        intercepted = true
+        readCompleted.resolve()
+        await releaseRead.promise
+      }
+      return result
+    }) as any)
+
+    try {
+      const reconciliation = reconcileReminder(reminder.id, ctx, state, config)
+      await readCompleted.promise
+      await cancelReminder(reminder.id, ctx, state)
+
+      expect(state.reminders.has(reminder.id)).toBe(false)
+      expect(state.timers.has(reminder.id)).toBe(false)
+      releaseRead.resolve()
+      await reconciliation
+    } finally {
+      releaseRead.resolve()
+      read.mockRestore()
+    }
+
+    expect(await loadReminder(reminder.id, ctx)).toBeNull()
+    expect(state.reminders.has(reminder.id)).toBe(false)
+    expect(state.timers.has(reminder.id)).toBe(false)
   })
 
   test("toast failure after a successful transition does not cancel recurrence", async () => {

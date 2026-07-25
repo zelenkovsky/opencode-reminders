@@ -9,5 +9,8 @@ prompt contention. Persistence-failure tests verify startup skip-overdue retenti
 rates while the prior JSON remains readable. Child-process tests use strict stdin barriers and are
 responsible for closing their children during cleanup.
 
+Cancellation tests also pause a completed reconciliation read, finish durable cancellation, and
+then release the stale continuation to verify it cannot restore local state or a timer.
+
 The suite intentionally does not claim exact-once prompt delivery across a crash or storage failure
 after prompt acceptance. It tests the plugin's same-host coordination and reconciliation behavior.

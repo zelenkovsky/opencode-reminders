@@ -16,6 +16,13 @@ type ProjectRuntime = {
   generation: string
   executions: Map<string, ScheduledExecution>
   persistence: Map<string, Promise<unknown>>
+  fences: Map<string, ReminderFence>
+}
+
+type ReminderFence = {
+  version: number
+  reconciliations: number
+  tombstone: boolean
 }
 
 type ScheduleOptions = {
@@ -45,9 +52,11 @@ function getRuntime(ctx: PluginInput): ProjectRuntime {
       generation: crypto.randomUUID(),
       executions: new Map(),
       persistence: new Map(),
+      fences: new Map(),
     }
     runtimes.set(key, runtime)
   }
+  runtime.fences ??= new Map()
   return runtime
 }
 
@@ -82,6 +91,7 @@ function stopLocalExecution(id: string, runtime: ProjectRuntime): ScheduledExecu
 export function beginSchedulerGeneration(ctx: PluginInput): string {
   const runtime = getRuntime(ctx)
   for (const id of Array.from(runtime.executions.keys())) stopLocalExecution(id, runtime)
+  for (const [id, fence] of runtime.fences) retireFence(id, runtime, fence)
   runtime.generation = crypto.randomUUID()
   return runtime.generation
 }
@@ -126,11 +136,65 @@ function clearStateReminder(id: string, state: State): void {
   state.reminders.delete(id)
 }
 
+function beginReconciliation(id: string, runtime: ProjectRuntime): { fence: ReminderFence; version: number } {
+  let fence = runtime.fences.get(id)
+  if (!fence) {
+    fence = { version: 0, reconciliations: 0, tombstone: false }
+    runtime.fences.set(id, fence)
+  }
+  fence.reconciliations++
+  return { fence, version: fence.version }
+}
+
+function reconciliationIsCurrent(
+  id: string,
+  runtime: ProjectRuntime,
+  fence: ReminderFence,
+  version: number,
+): boolean {
+  return runtime.fences.get(id) === fence && fence.version === version && !fence.tombstone
+}
+
+function finishReconciliation(id: string, runtime: ProjectRuntime, fence: ReminderFence): void {
+  fence.reconciliations--
+  retireFence(id, runtime, fence)
+}
+
+function invalidateReminder(id: string, runtime: ProjectRuntime): ReminderFence {
+  let fence = runtime.fences.get(id)
+  if (!fence) {
+    fence = { version: 0, reconciliations: 0, tombstone: false }
+    runtime.fences.set(id, fence)
+  }
+  fence.version++
+  fence.tombstone = true
+  return fence
+}
+
+function retireFence(id: string, runtime: ProjectRuntime, fence: ReminderFence): void {
+  if (
+    runtime.fences.get(id) === fence
+    && fence.reconciliations === 0
+    && !runtime.executions.has(id)
+  ) {
+    runtime.fences.delete(id)
+  }
+}
+
 async function deleteReminderLocked(id: string, ctx: PluginInput, state: State): Promise<void> {
-  const execution = stopLocalExecution(id, getRuntime(ctx))
+  const runtime = getRuntime(ctx)
+  const fence = invalidateReminder(id, runtime)
+  const execution = stopLocalExecution(id, runtime)
   clearStateReminder(id, state)
   if (execution && execution.state !== state) clearStateReminder(id, execution.state)
-  await deleteReminder(id, ctx)
+  try {
+    await deleteReminder(id, ctx)
+  } catch (error) {
+    fence.tombstone = false
+    throw error
+  } finally {
+    retireFence(id, runtime, fence)
+  }
 }
 
 export async function deleteStoredReminder(id: string, ctx: PluginInput, state: State): Promise<void> {
@@ -244,22 +308,46 @@ export async function reconcileReminder(
   options: ScheduleOptions = {},
 ): Promise<void> {
   if (!isCurrentGeneration(state, ctx)) return
+  const runtime = getRuntime(ctx)
+  const { fence, version } = beginReconciliation(id, runtime)
   try {
-    const stored = await loadReminder(id, ctx)
-    if (!isCurrentGeneration(state, ctx)) return
-    if (!stored || stored.status !== "active") {
-      clearStateReminder(id, state)
-      return
-    }
-    state.reminders.set(id, stored)
-    await scheduleTimer(stored, ctx, state, config, {
-      persist: false,
-      skipOverdue: options.skipOverdue,
-      retryAttempt: options.retryAttempt,
+    await loadReminder(id, ctx)
+    if (
+      !isCurrentGeneration(state, ctx)
+      || !reconciliationIsCurrent(id, runtime, fence, version)
+    ) return
+
+    await withMutationLock(id, ctx, async () => {
+      if (
+        !isCurrentGeneration(state, ctx)
+        || !reconciliationIsCurrent(id, runtime, fence, version)
+      ) return
+
+      // Re-read under the mutation lock so a cancellation in another process cannot
+      // be followed by restoration from the optimistic snapshot above.
+      const stored = await loadReminder(id, ctx)
+      if (
+        !isCurrentGeneration(state, ctx)
+        || !reconciliationIsCurrent(id, runtime, fence, version)
+      ) return
+      if (!stored || stored.status !== "active") {
+        clearStateReminder(id, state)
+        return
+      }
+      state.reminders.set(id, stored)
+      await scheduleTimer(stored, ctx, state, config, {
+        persist: false,
+        skipOverdue: options.skipOverdue,
+        retryAttempt: options.retryAttempt,
+      })
     })
   } catch (error) {
     logger.error(`Failed to reconcile reminder ${id}:`, error)
-    scheduleReconciliation(id, ctx, state, config, options)
+    if (reconciliationIsCurrent(id, runtime, fence, version)) {
+      scheduleReconciliation(id, ctx, state, config, options)
+    }
+  } finally {
+    finishReconciliation(id, runtime, fence)
   }
 }
 
@@ -478,14 +566,24 @@ export async function executeReminder(
 }
 
 export async function cancelReminder(id: string, ctx: PluginInput, state: State): Promise<boolean> {
-  const execution = stopLocalExecution(id, getRuntime(ctx))
+  const runtime = getRuntime(ctx)
+  const fence = invalidateReminder(id, runtime)
+  const execution = stopLocalExecution(id, runtime)
   clearStateReminder(id, state)
   if (execution && execution.state !== state) clearStateReminder(id, execution.state)
   try {
-    await withMutationLock(id, ctx, async () => deleteReminder(id, ctx))
+    await withMutationLock(id, ctx, async () => {
+      await deleteReminder(id, ctx)
+      const replacement = stopLocalExecution(id, runtime)
+      clearStateReminder(id, state)
+      if (replacement && replacement.state !== state) clearStateReminder(id, replacement.state)
+    })
+    retireFence(id, runtime, fence)
     logger.info(`Reminder ${id} cancelled`)
     return true
   } catch (error) {
+    fence.tombstone = false
+    retireFence(id, runtime, fence)
     logger.error(`Failed to cancel reminder ${id}:`, error)
     throw error
   }

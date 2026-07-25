@@ -86,6 +86,10 @@ timers, aborts active requests, waits for mutations already in progress, and pre
 reconciliation callbacks from changing replacement state. Cancellation aborts the active local
 request immediately, then uses the same mutation lock as cross-process transitions.
 
+Reconciliation reads are fenced per reminder and revalidated under the mutation lock. Once local
+cancellation returns, a read that completed before deletion cannot restore stale list state or a
+timer, even if its continuation resumes later.
+
 This is deliberately not a claim of crash-proof exactly-once delivery. Any process, storage, or lock
 failure after the prompt API accepts a request but before its durable transition can lead to retry.
 That is at-least-once crash semantics; true exactly-once delivery requires idempotency support in the
