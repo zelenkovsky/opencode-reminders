@@ -3,13 +3,21 @@ import { logger } from "./logger"
 import type { State, PluginConfig } from "./types"
 import { ReminderSchema } from "./types"
 import { getStorageDir, listReminders } from "./storage"
-import { scheduleTimer, cancelReminder, cleanupReminderSnapshot } from "./scheduler"
+import {
+  beginSchedulerGeneration,
+  isSchedulerGenerationCurrent,
+  waitForSchedulerMutations,
+  scheduleTimer,
+  cancelReminder,
+  cleanupReminderSnapshot,
+} from "./scheduler"
 import { createReminderAddTool } from "./tools/reminderadd"
 import { createReminderListTool } from "./tools/reminderlist"
 import { createReminderRemoveTool } from "./tools/reminderremove"
 
 const RemindersPlugin: Plugin = async (ctx) => {
   const { project } = ctx
+  const generation = beginSchedulerGeneration(ctx)
 
   logger.info(`[RemindersPlugin] Initializing for project ${project.id}`)
 
@@ -19,6 +27,7 @@ const RemindersPlugin: Plugin = async (ctx) => {
     reminders: new Map(),
     timers: new Map(),
     projectID: project.id,
+    generation,
   }
 
   // Configuration with defaults
@@ -38,9 +47,12 @@ const RemindersPlugin: Plugin = async (ctx) => {
   let invalidCount = 0
   let healthyCount = 0
 
+  if (!(await waitForSchedulerMutations(ctx, generation))) return {}
   const storedReminders = await listReminders(ctx)
+  if (!isSchedulerGenerationCurrent(ctx, generation)) return {}
 
   for (const snapshot of storedReminders) {
+    if (!isSchedulerGenerationCurrent(ctx, generation)) return {}
     const parsed = ReminderSchema.safeParse(snapshot)
     // Persisted filenames are derived from IDs. Only generated UUID snapshots with safe
     // timestamps may be re-opened or cleaned; malformed files are left for manual repair.
@@ -59,14 +71,19 @@ const RemindersPlugin: Plugin = async (ctx) => {
           logger.info(`[RemindersPlugin] Reminder ${reminder.id} expired, removing`)
           expiredCount++
         }
+        if (!isSchedulerGenerationCurrent(ctx, generation)) return {}
         continue
       }
 
       state.reminders.set(reminder.id, reminder)
-      await scheduleTimer(reminder, ctx, state, config, { skipOverdue: true })
+      const scheduled = await scheduleTimer(reminder, ctx, state, config, {
+        persist: false,
+        skipOverdue: true,
+      })
+      if (!isSchedulerGenerationCurrent(ctx, generation)) return {}
 
       // Validate timer was actually created (timer health validation)
-      const isHealthy = state.timers.has(reminder.id)
+      const isHealthy = scheduled && state.timers.has(reminder.id)
       if (isHealthy) {
         restoredCount++
         healthyCount++
@@ -91,7 +108,7 @@ const RemindersPlugin: Plugin = async (ctx) => {
   // Cleanup considerations:
   // - timer.unref() allows clean exit without blocking the process
   // - Plugin API currently has no cleanup hook for graceful shutdown
-  // - On hot-reload, old timers may fire once but won't be rescheduled (state is in new instance)
+  // - A replacement generation clears timers and aborts active executions from the old instance
   // - Reminder state persists to storage and is restored on next startup
   // - Max reminders per project (50) bounds memory usage
 
@@ -111,11 +128,12 @@ const RemindersPlugin: Plugin = async (ctx) => {
 
         const remindersToCancel = Array.from(state.reminders.values()).filter((r) => r.sessionID === sessionID)
 
+        let cancelledCount = 0
         for (const reminder of remindersToCancel) {
-          await cancelReminder(reminder.id, ctx, state)
+          if (await cancelReminder(reminder.id, ctx, state)) cancelledCount++
         }
 
-        logger.info(`[RemindersPlugin] Cancelled ${remindersToCancel.length} reminders for session ${sessionID}`)
+        logger.info(`[RemindersPlugin] Cancelled ${cancelledCount} reminders for session ${sessionID}`)
       }
     },
 

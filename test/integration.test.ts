@@ -2,6 +2,7 @@ import { test, expect, describe, beforeEach, afterEach } from "bun:test"
 import RemindersPlugin from "../index"
 import type { PluginInput } from "@opencode-ai/plugin"
 import { $ } from "bun"
+import { acquireMutationLock } from "../leases"
 
 async function createMockContext(tmpDir: string): Promise<PluginInput> {
   const sessions = new Map<string, any>()
@@ -78,6 +79,79 @@ describe("Integration Tests", () => {
 
     expect(result).toContain("Reminder set")
     expect(result).toContain("File change check")
+  })
+
+  test("reminderadd captures the creating agent", async () => {
+    const plugin = await RemindersPlugin(ctx)
+    await plugin.tool!.reminderadd.execute(
+      {
+        interval_seconds: 60,
+        type: "one-time" as const,
+        action_prompt: "agent action",
+        description: "Agent capture",
+      },
+      { sessionID: "ses-agent", agent: "build" } as any,
+    )
+
+    const directory = `${tmpDir}/.opencode/reminders/test-project-integration`
+    const files = await Array.fromAsync(new Bun.Glob("*.json").scan({ cwd: directory, absolute: true }))
+    expect(files).toHaveLength(1)
+    expect((await Bun.file(files[0]).json()).agent).toBe("build")
+  })
+
+  test("replacement initialization drains and fences an in-progress add", async () => {
+    const plugin = await RemindersPlugin(ctx)
+    const lock = await acquireMutationLock("blocked", ctx)
+    const originalUUID = crypto.randomUUID
+    ;(crypto as any).randomUUID = () => "blocked"
+    try {
+      const add = plugin.tool!.reminderadd.execute(
+        {
+          interval_seconds: 60,
+          type: "one-time" as const,
+          action_prompt: "blocked add",
+          description: "Blocked add",
+        },
+        { sessionID: "ses-blocked" } as any,
+      )
+      await Bun.sleep(50)
+      const replacement = RemindersPlugin(ctx)
+      await Bun.sleep(50)
+      await lock.release()
+
+      expect(await add).toContain("scheduler reloaded")
+      const replacementPlugin = await replacement
+      expect(await replacementPlugin.tool!.reminderlist.execute(
+        {},
+        { sessionID: "ses-blocked" } as any,
+      )).toContain("No active reminders")
+    } finally {
+      ;(crypto as any).randomUUID = originalUUID
+      await lock.release()
+    }
+  })
+
+  test("a stale remove tool cancels the replacement generation reminder", async () => {
+    const stale = await RemindersPlugin(ctx)
+    await stale.tool!.reminderadd.execute(
+      {
+        interval_seconds: 60,
+        type: "recurring" as const,
+        action_prompt: "stale cancellation",
+        description: "Stale generation cancellation",
+      },
+      { sessionID: "ses-stale" } as any,
+    )
+    const replacement = await RemindersPlugin(ctx)
+
+    expect(await stale.tool!.reminderremove.execute(
+      { description_pattern: "Stale generation" },
+      { sessionID: "ses-stale" } as any,
+    )).toContain("Reminder cancelled")
+    expect(await replacement.tool!.reminderlist.execute(
+      {},
+      { sessionID: "ses-stale" } as any,
+    )).toContain("No active reminders")
   })
 
   test("reminderlist tool returns empty for new session", async () => {

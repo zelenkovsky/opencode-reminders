@@ -75,6 +75,11 @@ Post-prompt recurrence updates and every plugin cancellation/restore cleanup sha
 per-reminder mutation lock, so the durable read-and-transition cannot race a deletion. The lock is
 not held while the prompt API runs.
 
+Within one server process, plugin generations also fence hot reloads. Reinitialization clears old
+timers, aborts active requests, waits for mutations already in progress, and prevents stale timer or
+reconciliation callbacks from changing replacement state. Cancellation aborts the active local
+request immediately, then uses the same mutation lock as cross-process transitions.
+
 This is deliberately not a claim of crash-proof exactly-once delivery. Any process, storage, or lock
 failure after the prompt API accepts a request but before its durable transition can lead to retry.
 That is at-least-once crash semantics; true exactly-once delivery requires idempotency support in the
@@ -92,6 +97,9 @@ manual cleanup rather than risk a duplicate prompt.
 
 A stale `.recover` guard is never reclaimed automatically. This avoids a replacement race that could
 delete a live guard or lease, at the cost of manual cleanup after a recovery-process crash.
+
+Reminders capture the creating tool context's optional agent name and pass it back to the prompt API
+when they execute. Existing reminder files without `agent` remain valid and omit the prompt field.
 
 ## Data Storage
 

@@ -44,7 +44,7 @@ export async function loadReminder(id: string, ctx: PluginInput): Promise<Remind
 export async function deleteReminder(id: string, ctx: PluginInput): Promise<void> {
   const dir = await getStorageDir(ctx)
   const filePath = path.join(dir, `${id}.json`)
-  await ctx.$`rm -f ${filePath}`.quiet()
+  await rm(filePath, { force: true })
 }
 
 export async function listReminders(ctx: PluginInput): Promise<Reminder[]> {

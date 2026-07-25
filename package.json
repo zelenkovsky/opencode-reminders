@@ -1,6 +1,6 @@
 {
   "name": "opencode-reminders",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Reminder plugin for OpenCode - schedule actions to run at intervals",
   "keywords": ["opencode", "reactive", "plugin", "reminders", "scheduler"],
   "author": "zelenkovsky",

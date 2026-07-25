@@ -1,10 +1,25 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test"
-import { scheduleTimer, executeReminder, cancelReminder, reconcileReminder, cleanupReminderSnapshot } from "../scheduler"
+import {
+  beginSchedulerGeneration,
+  scheduleTimer,
+  executeReminder,
+  cancelReminder,
+  reconcileReminder,
+  cleanupReminderSnapshot,
+} from "../scheduler"
 import type { Reminder, State, PluginConfig } from "../types"
 import type { PluginInput } from "@opencode-ai/plugin"
 import { $ } from "bun"
 import { saveReminder, loadReminder, deleteReminder, getStorageDir } from "../storage"
 import { acquireExecutionLease, acquireMutationLock } from "../leases"
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise
+  })
+  return { promise, resolve }
+}
 
 async function createMockContext(tmpDir: string): Promise<PluginInput> {
   return {
@@ -623,5 +638,114 @@ describe("Scheduler", () => {
 
     expect(state.reminders.has(reminder.id)).toBe(true)
     expect(state.timers.has(reminder.id)).toBe(true)
+  })
+
+  test("cancellation aborts an active prompt and cannot reschedule it", async () => {
+    const promptStarted = deferred<AbortSignal>()
+    const finishPrompt = deferred()
+    ;(ctx.client.session.prompt as any) = async (options: any) => {
+      promptStarted.resolve(options.signal)
+      await finishPrompt.promise
+      return { data: {}, error: undefined, response: {} }
+    }
+    const reminder: Reminder = {
+      id: "rem-active-cancel",
+      sessionID: "ses-test",
+      projectID: state.projectID,
+      type: "recurring",
+      interval: 60000,
+      originalPrompt: "active cancellation",
+      userDescription: "Active cancellation",
+      time: { created: Date.now(), nextExecution: Date.now() + 5 },
+      status: "active",
+    }
+    state.reminders.set(reminder.id, reminder)
+    await scheduleTimer(reminder, ctx, state, config)
+
+    const signal = await promptStarted.promise
+    await cancelReminder(reminder.id, ctx, state)
+    finishPrompt.resolve()
+    await Bun.sleep(0)
+
+    expect(signal.aborted).toBe(true)
+    expect(await loadReminder(reminder.id, ctx)).toBeNull()
+    expect(state.reminders.has(reminder.id)).toBe(false)
+    expect(state.timers.has(reminder.id)).toBe(false)
+  })
+
+  test("replacement generation fences an active old occurrence", async () => {
+    const promptStarted = deferred<AbortSignal>()
+    const finishPrompt = deferred()
+    ;(ctx.client.session.prompt as any) = async (options: any) => {
+      promptStarted.resolve(options.signal)
+      await finishPrompt.promise
+      return { data: {}, error: undefined, response: {} }
+    }
+    const reminder: Reminder = {
+      id: "rem-hot-reload",
+      sessionID: "ses-test",
+      projectID: state.projectID,
+      type: "recurring",
+      interval: 60000,
+      originalPrompt: "hot reload",
+      userDescription: "Hot reload",
+      time: { created: Date.now(), nextExecution: Date.now() + 5 },
+      status: "active",
+    }
+    state.reminders.set(reminder.id, reminder)
+    await scheduleTimer(reminder, ctx, state, config)
+    const oldSignal = await promptStarted.promise
+
+    const replacement: State = {
+      reminders: new Map(),
+      timers: new Map(),
+      projectID: state.projectID,
+      generation: beginSchedulerGeneration(ctx),
+    }
+    const replacementReminder = structuredClone(reminder)
+    replacementReminder.time.nextExecution = Date.now() + 60000
+    replacement.reminders.set(reminder.id, replacementReminder)
+    await scheduleTimer(replacementReminder, ctx, replacement, config)
+    finishPrompt.resolve()
+    await Bun.sleep(0)
+
+    expect(oldSignal.aborted).toBe(true)
+    expect(state.timers.has(reminder.id)).toBe(false)
+    expect(replacement.timers.has(reminder.id)).toBe(true)
+    expect((await loadReminder(reminder.id, ctx))?.time.nextExecution).toBe(
+      replacementReminder.time.nextExecution,
+    )
+    await cancelReminder(reminder.id, ctx, replacement)
+  })
+
+  test("forwards a captured agent and omits it for legacy reminders", async () => {
+    const bodies: any[] = []
+    ;(ctx.client.session.prompt as any) = async (options: any) => {
+      bodies.push(options.body)
+      return { data: {}, error: undefined, response: {} }
+    }
+    const base: Reminder = {
+      id: "rem-agent",
+      sessionID: "ses-test",
+      projectID: state.projectID,
+      type: "one-time",
+      interval: 1000,
+      originalPrompt: "agent forwarding",
+      userDescription: "Agent forwarding",
+      time: { created: Date.now(), nextExecution: Date.now() + 1000 },
+      status: "active",
+    }
+    const withAgent = { ...base, agent: "build" }
+    state.reminders.set(withAgent.id, withAgent)
+    await saveReminder(withAgent, ctx)
+    await executeReminder(withAgent, ctx, state, config)
+
+    const legacy = { ...base, id: "rem-legacy-agent" }
+    state.reminders.set(legacy.id, legacy)
+    await saveReminder(legacy, ctx)
+    await executeReminder(legacy, ctx, state, config)
+
+    expect(bodies[0].agent).toBe("build")
+    expect(Object.hasOwn(bodies[1], "agent")).toBe(false)
   })
 })
