@@ -1,6 +1,7 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test"
 import {
   beginSchedulerGeneration,
+  waitForSchedulerMutations,
   scheduleTimer,
   executeReminder,
   cancelReminder,
@@ -19,6 +20,14 @@ function deferred<T = void>() {
     resolve = resolvePromise
   })
   return { promise, resolve }
+}
+
+async function waitFor(predicate: () => boolean | Promise<boolean>, timeout = 2000): Promise<void> {
+  const deadline = Date.now() + timeout
+  while (!(await predicate())) {
+    if (Date.now() >= deadline) throw new Error("Timed out waiting for condition")
+    await Bun.sleep(10)
+  }
 }
 
 async function createMockContext(tmpDir: string): Promise<PluginInput> {
@@ -72,6 +81,8 @@ describe("Scheduler", () => {
   })
 
   afterEach(async () => {
+    const generation = beginSchedulerGeneration(ctx)
+    await waitForSchedulerMutations(ctx, generation)
     for (const timer of state.timers.values()) {
       clearTimeout(timer)
     }
@@ -665,7 +676,11 @@ describe("Scheduler", () => {
     const signal = await promptStarted.promise
     await cancelReminder(reminder.id, ctx, state)
     finishPrompt.resolve()
-    await Bun.sleep(0)
+    const directory = await getStorageDir(ctx)
+    await waitFor(async () => {
+      const leases = await Array.fromAsync(new Bun.Glob("*.lease").scan({ cwd: directory }))
+      return leases.length === 0
+    })
 
     expect(signal.aborted).toBe(true)
     expect(await loadReminder(reminder.id, ctx)).toBeNull()

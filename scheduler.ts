@@ -21,9 +21,14 @@ type ProjectRuntime = {
 type ScheduleOptions = {
   persist?: boolean
   skipOverdue?: boolean
+  retryAttempt?: number
 }
 
 const RECONCILIATION_DELAY_MS = 250
+const MAX_RECONCILIATION_DELAY_MS = 30_000
+const MAX_RECONCILIATION_ATTEMPT = 1 + Math.ceil(
+  Math.log2(MAX_RECONCILIATION_DELAY_MS / RECONCILIATION_DELAY_MS),
+)
 const runtimesKey = Symbol.for("opencode-reminders.scheduler-runtimes")
 const runtimes: Map<string, ProjectRuntime> =
   (globalThis as any)[runtimesKey] ?? ((globalThis as any)[runtimesKey] = new Map())
@@ -176,6 +181,7 @@ export async function scheduleTimer(
   const now = Date.now()
   const delay = Math.max(0, reminder.time.nextExecution - now)
   const skipOverdue = options.skipOverdue === true && reminder.time.nextExecution < now
+  const retryAttempt = reminder.time.nextExecution < now ? options.retryAttempt ?? 0 : 0
   const timer = setTimeout(async () => {
     if (state.timers.get(reminder.id) === timer) state.timers.delete(reminder.id)
     if (!isCurrentExecution(reminder.id, ctx, state, token)) return
@@ -184,11 +190,11 @@ export async function scheduleTimer(
     execution.timer = undefined
     execution.controller = controller
     try {
-      await executeReminder(reminder, ctx, state, config, skipOverdue, token, controller.signal)
+      await executeReminder(reminder, ctx, state, config, skipOverdue, retryAttempt, token, controller.signal)
     } catch (error) {
       logger.error(`Unhandled reminder timer failure ${reminder.id}:`, error)
       if (isCurrentExecution(reminder.id, ctx, state, token)) {
-        scheduleReconciliation(reminder.id, ctx, state, config)
+        scheduleReconciliation(reminder.id, ctx, state, config, { skipOverdue, retryAttempt })
       }
     }
   }, delay)
@@ -198,21 +204,45 @@ export async function scheduleTimer(
   return true
 }
 
-function scheduleReconciliation(id: string, ctx: PluginInput, state: State, config: PluginConfig): void {
+function scheduleReconciliation(
+  id: string,
+  ctx: PluginInput,
+  state: State,
+  config: PluginConfig,
+  options: ScheduleOptions = {},
+): void {
   if (!isCurrentGeneration(state, ctx)) return
   const existing = state.timers.get(id)
   if (existing) clearTimeout(existing)
   const generation = stateGeneration(state, ctx)
+  const retryAttempt = Math.min((options.retryAttempt ?? 0) + 1, MAX_RECONCILIATION_ATTEMPT)
+  const delay = Math.min(
+    RECONCILIATION_DELAY_MS * (2 ** (retryAttempt - 1)),
+    MAX_RECONCILIATION_DELAY_MS,
+  )
   const timer = setTimeout(async () => {
     if (state.timers.get(id) === timer) state.timers.delete(id)
+    const execution = getRuntime(ctx).executions.get(id)
+    if (execution?.timer === timer) execution.timer = undefined
     if (!isSchedulerGenerationCurrent(ctx, generation)) return
-    await reconcileReminder(id, ctx, state, config)
-  }, RECONCILIATION_DELAY_MS)
+    await reconcileReminder(id, ctx, state, config, {
+      skipOverdue: options.skipOverdue,
+      retryAttempt,
+    })
+  }, delay)
   timer.unref()
   state.timers.set(id, timer)
+  const execution = getRuntime(ctx).executions.get(id)
+  if (execution?.generation === generation) execution.timer = timer
 }
 
-export async function reconcileReminder(id: string, ctx: PluginInput, state: State, config: PluginConfig): Promise<void> {
+export async function reconcileReminder(
+  id: string,
+  ctx: PluginInput,
+  state: State,
+  config: PluginConfig,
+  options: ScheduleOptions = {},
+): Promise<void> {
   if (!isCurrentGeneration(state, ctx)) return
   try {
     const stored = await loadReminder(id, ctx)
@@ -222,10 +252,14 @@ export async function reconcileReminder(id: string, ctx: PluginInput, state: Sta
       return
     }
     state.reminders.set(id, stored)
-    await scheduleTimer(stored, ctx, state, config, { persist: false })
+    await scheduleTimer(stored, ctx, state, config, {
+      persist: false,
+      skipOverdue: options.skipOverdue,
+      retryAttempt: options.retryAttempt,
+    })
   } catch (error) {
     logger.error(`Failed to reconcile reminder ${id}:`, error)
-    scheduleReconciliation(id, ctx, state, config)
+    scheduleReconciliation(id, ctx, state, config, options)
   }
 }
 
@@ -261,6 +295,7 @@ async function skipMissedRecurring(
   state: State,
   config: PluginConfig,
   skipOverdue: boolean,
+  retryAttempt: number,
 ): Promise<boolean> {
   if (!skipOverdue || reminder.type !== "recurring") return false
   let advanced = false
@@ -276,7 +311,9 @@ async function skipMissedRecurring(
     }
     advanced = true
   })
-  if (!advanced) await reconcileReminder(reminder.id, ctx, state, config)
+  if (!advanced) {
+    await reconcileReminder(reminder.id, ctx, state, config, { skipOverdue, retryAttempt })
+  }
   return true
 }
 
@@ -287,6 +324,7 @@ async function handlePromptError(
   ctx: PluginInput,
   state: State,
   config: PluginConfig,
+  retryAttempt: number,
 ): Promise<void> {
   try {
     let changed = false
@@ -305,10 +343,10 @@ async function handlePromptError(
         await deleteReminderLocked(current.id, ctx, state)
       }
     })
-    if (!changed) await reconcileReminder(reminder.id, ctx, state, config)
+    if (!changed) await reconcileReminder(reminder.id, ctx, state, config, { retryAttempt })
   } catch (mutationError) {
     logger.error(`Failed to handle reminder prompt error ${reminder.id}:`, mutationError)
-    await reconcileReminder(reminder.id, ctx, state, config)
+    scheduleReconciliation(reminder.id, ctx, state, config, { retryAttempt })
   }
 }
 
@@ -318,6 +356,7 @@ export async function executeReminder(
   state: State,
   config: PluginConfig,
   skipOverdue = false,
+  retryAttempt = 0,
   token?: string,
   signal?: AbortSignal,
 ): Promise<void> {
@@ -343,7 +382,7 @@ export async function executeReminder(
       logger.error(`Could not acquire reminder lease ${reminder.id}:`, acquisition.error)
     }
     if (isCurrentExecution(reminder.id, ctx, state, token)) {
-      scheduleReconciliation(reminder.id, ctx, state, config)
+      scheduleReconciliation(reminder.id, ctx, state, config, { skipOverdue, retryAttempt })
     }
     return
   }
@@ -353,13 +392,21 @@ export async function executeReminder(
       const stored = await loadReminder(reminder.id, ctx)
       if (!isCurrentExecution(reminder.id, ctx, state, token)) return
       if (!stored || stored.status !== "active" || stored.time.nextExecution !== occurrence) {
-        await reconcileReminder(reminder.id, ctx, state, config)
+        await reconcileReminder(reminder.id, ctx, state, config, { skipOverdue, retryAttempt })
         return
       }
-      if (await skipMissedRecurring(stored, occurrence, ctx, state, config, skipOverdue)) return
+      if (await skipMissedRecurring(
+        stored,
+        occurrence,
+        ctx,
+        state,
+        config,
+        skipOverdue,
+        retryAttempt,
+      )) return
     } catch (error) {
       logger.error(`Pre-prompt validation failed for reminder ${reminder.id}:`, error)
-      await reconcileReminder(reminder.id, ctx, state, config)
+      scheduleReconciliation(reminder.id, ctx, state, config, { skipOverdue, retryAttempt })
       return
     }
 
@@ -375,7 +422,7 @@ export async function executeReminder(
     } catch (error: any) {
       if (!isCurrentExecution(reminder.id, ctx, state, token)) return
       logger.error(`Reminder ${reminder.id} prompt failed:`, error)
-      await handlePromptError(reminder, occurrence, error, ctx, state, config)
+      await handlePromptError(reminder, occurrence, error, ctx, state, config, retryAttempt)
       return
     }
 
@@ -399,7 +446,7 @@ export async function executeReminder(
         }
         return current
       })
-      if (!completed) await reconcileReminder(reminder.id, ctx, state, config)
+      if (!completed) await reconcileReminder(reminder.id, ctx, state, config, { retryAttempt })
       else if (config.notifications.enabled && isCurrentGeneration(state, ctx)) {
         try {
           await ctx.client.tui.showToast({
@@ -416,14 +463,16 @@ export async function executeReminder(
       }
     } catch (error) {
       logger.error(`Post-prompt transition failed for reminder ${reminder.id}:`, error)
-      await reconcileReminder(reminder.id, ctx, state, config)
+      scheduleReconciliation(reminder.id, ctx, state, config, { retryAttempt })
     }
   } finally {
     try {
       await acquisition.lease.release()
     } catch (error) {
       logger.error(`Failed to release reminder lease ${reminder.id}:`, error)
-      if (isCurrentGeneration(state, ctx)) scheduleReconciliation(reminder.id, ctx, state, config)
+      if (isCurrentGeneration(state, ctx)) {
+        scheduleReconciliation(reminder.id, ctx, state, config, { skipOverdue, retryAttempt })
+      }
     }
   }
 }

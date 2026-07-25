@@ -75,6 +75,12 @@ Post-prompt recurrence updates and every plugin cancellation/restore cleanup sha
 per-reminder mutation lock, so the durable read-and-transition cannot race a deletion. The lock is
 not held while the prompt API runs.
 
+Reconciliation retries use capped exponential backoff. A recurring occurrence found overdue during
+startup retains its skip-overdue policy across read or atomic-write failures, so unchanged old JSON
+is never reinterpreted as a normal occurrence and prompted. Normal runtime failures retain the
+occurrence for an at-least-once retry; the retry history resets after durable state advances into the
+future.
+
 Within one server process, plugin generations also fence hot reloads. Reinitialization clears old
 timers, aborts active requests, waits for mutations already in progress, and prevents stale timer or
 reconciliation callbacks from changing replacement state. Cancellation aborts the active local
