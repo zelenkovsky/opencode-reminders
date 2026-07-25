@@ -21,6 +21,23 @@ describe("Reminder Types", () => {
     expect(() => ReminderSchema.parse(validReminder)).not.toThrow()
   })
 
+  test("ReminderSchema preserves an optional agent and accepts legacy omission", () => {
+    const reminder = {
+      id: "test-agent",
+      sessionID: "ses-agent",
+      projectID: "prj-agent",
+      type: "one-time" as const,
+      interval: 5000,
+      originalPrompt: "test",
+      userDescription: "Agent reminder",
+      time: { created: Date.now(), nextExecution: Date.now() + 5000 },
+      status: "active" as const,
+    }
+
+    expect(ReminderSchema.parse(reminder).agent).toBeUndefined()
+    expect(ReminderSchema.parse({ ...reminder, agent: "build" }).agent).toBe("build")
+  })
+
   test("ReminderSchema rejects invalid type", () => {
     const invalidReminder = {
       id: "test-123",

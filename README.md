@@ -65,6 +65,56 @@ OpenCode will automatically load the plugin when you start the TUI.
 3. **Execution** - Sends prompt to session when timer fires
 4. **Cleanup** - Removes reminders when session deleted
 
+## Multi-Process Semantics
+
+When independent OpenCode server processes load the same reminder directory on one host, an
+occurrence lease prevents them from submitting the same prompt concurrently. Leases and reminder
+JSON updates use same-directory atomic filesystem operations. A losing process keeps an unref'd
+reconciliation timer, reloads durable state, and schedules the winner's next recurring occurrence.
+Post-prompt recurrence updates and every plugin cancellation/restore cleanup share a short-lived
+per-reminder mutation lock, so the durable read-and-transition cannot race a deletion. The lock is
+not held while the prompt API runs.
+
+Reconciliation retries use capped exponential backoff. A recurring occurrence found overdue during
+startup retains its skip-overdue policy across read or atomic-write failures, so unchanged old JSON
+is never reinterpreted as a normal occurrence and prompted. Normal runtime failures retain the
+occurrence for an at-least-once retry; the retry history resets after durable state advances into the
+future.
+
+Within one server process, plugin generations also fence hot reloads. Reinitialization clears old
+timers, aborts active requests, waits for mutations already in progress, and prevents stale timer or
+reconciliation callbacks from changing replacement state. Cancellation aborts the active local
+request immediately, then uses the same mutation lock as cross-process transitions.
+
+Reconciliation reads are fenced per reminder and revalidated under the mutation lock. Once local
+cancellation returns, a read that completed before deletion cannot restore stale list state or a
+timer, even if its continuation resumes later.
+
+If durable cancellation fails, the plugin re-reads authoritative state through the same fence and
+lock protocol, restores a delayed timer, and returns the original deletion error. The reminder stays
+visible and can be cancelled again without restarting the server.
+
+This is deliberately not a claim of crash-proof exactly-once delivery. Any process, storage, or lock
+failure after the prompt API accepts a request but before its durable transition can lead to retry.
+That is at-least-once crash semantics; true exactly-once delivery requires idempotency support in the
+prompt API. Likewise, cancellation does not hold a lock across prompting: if an owner has already
+passed durable validation, a prompt can still be submitted even when cancellation returns first.
+The post-prompt durable transition remains fenced, so cancellation cannot intentionally resurrect or
+reschedule the reminder after deletion.
+
+The lease protocol assumes same-host processes and a local filesystem with atomic hard links,
+exclusive create, and rename. It is not intended to coordinate hosts or provide NFS/distributed
+filesystem safety. Linux detects a dead or reused PID using `/proc/<pid>/stat` process start time.
+Other platforms may acquire leases normally, but only reclaim a lease when `process.kill(pid, 0)`
+reports `ESRCH`; a reused PID is conservatively treated as live and can leave a stale lease until
+manual cleanup rather than risk a duplicate prompt.
+
+A stale `.recover` guard is never reclaimed automatically. This avoids a replacement race that could
+delete a live guard or lease, at the cost of manual cleanup after a recovery-process crash.
+
+Reminders capture the creating tool context's optional agent name and pass it back to the prompt API
+when they execute. Existing reminder files without `agent` remain valid and omit the prompt field.
+
 ## Data Storage
 
 Reminders stored in:

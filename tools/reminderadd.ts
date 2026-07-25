@@ -1,6 +1,5 @@
 import { tool, type PluginInput } from "@opencode-ai/plugin"
 import type { Reminder, State, PluginConfig } from "../types"
-import { saveReminder } from "../storage"
 import { scheduleTimer } from "../scheduler"
 import DESCRIPTION from "./reminderadd.txt"
 import { logger } from "../logger"
@@ -42,6 +41,7 @@ export function createReminderAddTool(
         interval: args.interval_seconds * 1000,
         originalPrompt: args.action_prompt,
         userDescription: args.description,
+        agent: context.agent,
         time: {
           created: Date.now(),
           nextExecution: Date.now() + args.interval_seconds * 1000,
@@ -50,8 +50,9 @@ export function createReminderAddTool(
       }
 
       state.reminders.set(reminder.id, reminder)
-      await saveReminder(reminder, ctx)
-      await scheduleTimer(reminder, ctx, state, config)
+      if (!(await scheduleTimer(reminder, ctx, state, config))) {
+        return "Reminder scheduler reloaded while setting the reminder. Check active reminders before retrying."
+      }
 
       logger.info(`[RemindersPlugin] Created ${args.type} reminder ${reminder.id}: ${args.description}`)
 

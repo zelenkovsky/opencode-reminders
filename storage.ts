@@ -1,4 +1,5 @@
 import path from "path"
+import { open, readFile, rename, rm } from "node:fs/promises"
 import type { PluginInput } from "@opencode-ai/plugin"
 import type { Reminder } from "./types"
 import { logger } from "./logger"
@@ -13,7 +14,19 @@ export async function getStorageDir(ctx: PluginInput): Promise<string> {
 export async function saveReminder(reminder: Reminder, ctx: PluginInput): Promise<void> {
   const dir = await getStorageDir(ctx)
   const filePath = path.join(dir, `${reminder.id}.json`)
-  await Bun.write(filePath, JSON.stringify(reminder, null, 2))
+  const temporaryPath = path.join(dir, `.${reminder.id}.${crypto.randomUUID()}.tmp`)
+  let handle
+
+  try {
+    handle = await open(temporaryPath, "wx", 0o600)
+    await handle.writeFile(JSON.stringify(reminder, null, 2))
+    await handle.close()
+    handle = undefined
+    await rename(temporaryPath, filePath)
+  } finally {
+    await handle?.close()
+    await rm(temporaryPath, { force: true })
+  }
 }
 
 export async function loadReminder(id: string, ctx: PluginInput): Promise<Reminder | null> {
@@ -21,16 +34,17 @@ export async function loadReminder(id: string, ctx: PluginInput): Promise<Remind
   const filePath = path.join(dir, `${id}.json`)
 
   try {
-    return await Bun.file(filePath).json()
-  } catch {
-    return null
+    return JSON.parse(await readFile(filePath, "utf8")) as Reminder
+  } catch (error: any) {
+    if (error?.code === "ENOENT") return null
+    throw error
   }
 }
 
 export async function deleteReminder(id: string, ctx: PluginInput): Promise<void> {
   const dir = await getStorageDir(ctx)
   const filePath = path.join(dir, `${id}.json`)
-  await ctx.$`rm -f ${filePath}`.quiet()
+  await rm(filePath, { force: true })
 }
 
 export async function listReminders(ctx: PluginInput): Promise<Reminder[]> {
