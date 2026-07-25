@@ -8,6 +8,7 @@ export const ReminderSchema = z.object({
   interval: z.number(),
   originalPrompt: z.string(),
   userDescription: z.string(),
+  agent: z.string().optional(),
   time: z.object({
     created: z.number(),
     nextExecution: z.number(),

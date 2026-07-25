@@ -42,6 +42,7 @@ export function createReminderAddTool(
         interval: args.interval_seconds * 1000,
         originalPrompt: args.action_prompt,
         userDescription: args.description,
+        agent: context.agent,
         time: {
           created: Date.now(),
           nextExecution: Date.now() + args.interval_seconds * 1000,

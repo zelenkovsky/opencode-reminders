@@ -1,5 +1,6 @@
 import { test, expect, describe, beforeEach, afterEach } from "bun:test"
 import RemindersPlugin from "../index"
+import { listReminders } from "../storage"
 import type { PluginInput } from "@opencode-ai/plugin"
 import { $ } from "bun"
 
@@ -78,6 +79,23 @@ describe("Integration Tests", () => {
 
     expect(result).toContain("Reminder set")
     expect(result).toContain("File change check")
+  })
+
+  test("reminderadd persists the scheduling agent", async () => {
+    const plugin = await RemindersPlugin(ctx)
+
+    await plugin.tool!.reminderadd.execute(
+      {
+        interval_seconds: 60,
+        type: "one-time" as const,
+        action_prompt: "check /workspace/test.txt for changes",
+        description: "Agent preservation test",
+      },
+      { sessionID: "ses-agent-test", agent: "God" } as any,
+    )
+
+    const [reminder] = await listReminders(ctx)
+    expect(reminder.agent).toBe("God")
   })
 
   test("reminderlist tool returns empty for new session", async () => {
