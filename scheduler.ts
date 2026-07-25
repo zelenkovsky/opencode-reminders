@@ -22,6 +22,7 @@ type ProjectRuntime = {
 type ReminderFence = {
   version: number
   reconciliations: number
+  deletions: number
   tombstone: boolean
 }
 
@@ -29,6 +30,7 @@ type ScheduleOptions = {
   persist?: boolean
   skipOverdue?: boolean
   retryAttempt?: number
+  minimumDelayMs?: number
 }
 
 const RECONCILIATION_DELAY_MS = 250
@@ -57,6 +59,7 @@ function getRuntime(ctx: PluginInput): ProjectRuntime {
     runtimes.set(key, runtime)
   }
   runtime.fences ??= new Map()
+  for (const fence of runtime.fences.values()) fence.deletions ??= 0
   return runtime
 }
 
@@ -139,7 +142,7 @@ function clearStateReminder(id: string, state: State): void {
 function beginReconciliation(id: string, runtime: ProjectRuntime): { fence: ReminderFence; version: number } {
   let fence = runtime.fences.get(id)
   if (!fence) {
-    fence = { version: 0, reconciliations: 0, tombstone: false }
+    fence = { version: 0, reconciliations: 0, deletions: 0, tombstone: false }
     runtime.fences.set(id, fence)
   }
   fence.reconciliations++
@@ -160,21 +163,31 @@ function finishReconciliation(id: string, runtime: ProjectRuntime, fence: Remind
   retireFence(id, runtime, fence)
 }
 
-function invalidateReminder(id: string, runtime: ProjectRuntime): ReminderFence {
+function invalidateReminder(
+  id: string,
+  runtime: ProjectRuntime,
+): { fence: ReminderFence; version: number } {
   let fence = runtime.fences.get(id)
   if (!fence) {
-    fence = { version: 0, reconciliations: 0, tombstone: false }
+    fence = { version: 0, reconciliations: 0, deletions: 0, tombstone: false }
     runtime.fences.set(id, fence)
   }
   fence.version++
+  fence.deletions++
   fence.tombstone = true
-  return fence
+  return { fence, version: fence.version }
+}
+
+function finishInvalidation(id: string, runtime: ProjectRuntime, fence: ReminderFence): void {
+  fence.deletions--
+  retireFence(id, runtime, fence)
 }
 
 function retireFence(id: string, runtime: ProjectRuntime, fence: ReminderFence): void {
   if (
     runtime.fences.get(id) === fence
     && fence.reconciliations === 0
+    && fence.deletions === 0
     && !runtime.executions.has(id)
   ) {
     runtime.fences.delete(id)
@@ -183,17 +196,17 @@ function retireFence(id: string, runtime: ProjectRuntime, fence: ReminderFence):
 
 async function deleteReminderLocked(id: string, ctx: PluginInput, state: State): Promise<void> {
   const runtime = getRuntime(ctx)
-  const fence = invalidateReminder(id, runtime)
+  const { fence, version } = invalidateReminder(id, runtime)
   const execution = stopLocalExecution(id, runtime)
   clearStateReminder(id, state)
   if (execution && execution.state !== state) clearStateReminder(id, execution.state)
   try {
     await deleteReminder(id, ctx)
   } catch (error) {
-    fence.tombstone = false
+    if (runtime.fences.get(id) === fence && fence.version === version) fence.tombstone = false
     throw error
   } finally {
-    retireFence(id, runtime, fence)
+    finishInvalidation(id, runtime, fence)
   }
 }
 
@@ -243,7 +256,7 @@ export async function scheduleTimer(
   }
 
   const now = Date.now()
-  const delay = Math.max(0, reminder.time.nextExecution - now)
+  const delay = Math.max(options.minimumDelayMs ?? 0, reminder.time.nextExecution - now, 0)
   const skipOverdue = options.skipOverdue === true && reminder.time.nextExecution < now
   const retryAttempt = reminder.time.nextExecution < now ? options.retryAttempt ?? 0 : 0
   const timer = setTimeout(async () => {
@@ -292,6 +305,7 @@ function scheduleReconciliation(
     await reconcileReminder(id, ctx, state, config, {
       skipOverdue: options.skipOverdue,
       retryAttempt,
+      minimumDelayMs: options.minimumDelayMs,
     })
   }, delay)
   timer.unref()
@@ -339,6 +353,7 @@ export async function reconcileReminder(
         persist: false,
         skipOverdue: options.skipOverdue,
         retryAttempt: options.retryAttempt,
+        minimumDelayMs: options.minimumDelayMs,
       })
     })
   } catch (error) {
@@ -565,10 +580,16 @@ export async function executeReminder(
   }
 }
 
-export async function cancelReminder(id: string, ctx: PluginInput, state: State): Promise<boolean> {
+export async function cancelReminder(
+  id: string,
+  ctx: PluginInput,
+  state: State,
+  config: PluginConfig,
+): Promise<boolean> {
   const runtime = getRuntime(ctx)
-  const fence = invalidateReminder(id, runtime)
+  const { fence, version } = invalidateReminder(id, runtime)
   const execution = stopLocalExecution(id, runtime)
+  const rollbackState = execution?.state ?? state
   clearStateReminder(id, state)
   if (execution && execution.state !== state) clearStateReminder(id, execution.state)
   try {
@@ -578,13 +599,23 @@ export async function cancelReminder(id: string, ctx: PluginInput, state: State)
       clearStateReminder(id, state)
       if (replacement && replacement.state !== state) clearStateReminder(id, replacement.state)
     })
-    retireFence(id, runtime, fence)
+    finishInvalidation(id, runtime, fence)
     logger.info(`Reminder ${id} cancelled`)
     return true
   } catch (error) {
-    fence.tombstone = false
-    retireFence(id, runtime, fence)
+    const ownsFence = runtime.fences.get(id) === fence && fence.version === version
+    if (ownsFence) fence.tombstone = false
+    finishInvalidation(id, runtime, fence)
     logger.error(`Failed to cancel reminder ${id}:`, error)
+    if (ownsFence) {
+      try {
+        await reconcileReminder(id, ctx, rollbackState, config, {
+          minimumDelayMs: RECONCILIATION_DELAY_MS,
+        })
+      } catch (rollbackError) {
+        logger.error(`Failed to restore reminder ${id} after cancellation failure:`, rollbackError)
+      }
+    }
     throw error
   }
 }

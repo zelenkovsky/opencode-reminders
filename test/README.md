@@ -11,6 +11,8 @@ responsible for closing their children during cleanup.
 
 Cancellation tests also pause a completed reconciliation read, finish durable cancellation, and
 then release the stale continuation to verify it cannot restore local state or a timer.
+Failed-deletion coverage verifies that authoritative state and a future timer are restored before
+the original error is returned, allowing a subsequent cancellation attempt to succeed.
 
 The suite intentionally does not claim exact-once prompt delivery across a crash or storage failure
 after prompt acceptance. It tests the plugin's same-host coordination and reconciliation behavior.

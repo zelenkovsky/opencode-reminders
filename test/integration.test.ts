@@ -264,7 +264,7 @@ describe("Integration Tests", () => {
     await waitFor(async () => (await loadReminder(reminder.id, ctx))!.time.nextExecution > Date.now())
     expect(prompts).toBeLessThanOrEqual(4)
     expect(state.timers.has(reminder.id)).toBe(true)
-    await cancelReminder(reminder.id, ctx, state)
+    await cancelReminder(reminder.id, ctx, state, config)
   })
 
   test("reminderlist tool returns empty for new session", async () => {

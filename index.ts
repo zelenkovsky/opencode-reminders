@@ -130,7 +130,7 @@ const RemindersPlugin: Plugin = async (ctx) => {
 
         let cancelledCount = 0
         for (const reminder of remindersToCancel) {
-          if (await cancelReminder(reminder.id, ctx, state)) cancelledCount++
+          if (await cancelReminder(reminder.id, ctx, state, config)) cancelledCount++
         }
 
         logger.info(`[RemindersPlugin] Cancelled ${cancelledCount} reminders for session ${sessionID}`)
@@ -140,7 +140,7 @@ const RemindersPlugin: Plugin = async (ctx) => {
     tool: {
       reminderadd: createReminderAddTool(ctx, state, () => config),
       reminderlist: createReminderListTool(state),
-      reminderremove: createReminderRemoveTool(ctx, state),
+      reminderremove: createReminderRemoveTool(ctx, state, () => config),
     },
   }
 }

@@ -1,10 +1,14 @@
 import { tool, type PluginInput } from "@opencode-ai/plugin"
-import type { State } from "../types"
+import type { PluginConfig, State } from "../types"
 import { cancelReminder } from "../scheduler"
 import DESCRIPTION from "./reminderremove.txt"
 import { logger } from "../logger"
 
-export function createReminderRemoveTool(ctx: PluginInput, state: State) {
+export function createReminderRemoveTool(
+  ctx: PluginInput,
+  state: State,
+  getConfig: () => PluginConfig,
+) {
   return tool({
     description: DESCRIPTION,
 
@@ -33,7 +37,7 @@ export function createReminderRemoveTool(ctx: PluginInput, state: State) {
       // Cancel all matching reminders
       const cancelledDescriptions: string[] = []
       for (const reminder of matches) {
-        if (await cancelReminder(reminder.id, ctx, state)) {
+        if (await cancelReminder(reminder.id, ctx, state, getConfig())) {
           cancelledDescriptions.push(reminder.userDescription)
           logger.info(`[RemindersPlugin] Cancelled reminder ${reminder.id} via user request`)
         }

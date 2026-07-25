@@ -164,17 +164,60 @@ describe("Scheduler", () => {
     expect(state.timers.has(reminder.id)).toBe(true)
     expect(state.reminders.has(reminder.id)).toBe(true)
 
-    await cancelReminder(reminder.id, ctx, state)
+    await cancelReminder(reminder.id, ctx, state, config)
 
     expect(state.timers.has(reminder.id)).toBe(false)
     expect(state.reminders.has(reminder.id)).toBe(false)
   })
 
   test("cancelReminder handles non-existent reminder gracefully", async () => {
-    await cancelReminder("non-existent", ctx, state)
+    await cancelReminder("non-existent", ctx, state, config)
 
     expect(state.timers.size).toBe(0)
     expect(state.reminders.size).toBe(0)
+  })
+
+  test("failed durable cancellation restores authoritative state for retry", async () => {
+    const reminder: Reminder = {
+      id: "rem-cancel-delete-failure",
+      sessionID: "ses-test",
+      projectID: state.projectID,
+      type: "recurring",
+      interval: 60000,
+      originalPrompt: "remain retryable",
+      userDescription: "Cancellation delete failure",
+      time: { created: Date.now(), nextExecution: Date.now() + 60000 },
+      status: "active",
+    }
+    let prompts = 0
+    ;(ctx.client.session.prompt as any) = async () => {
+      prompts++
+      return { data: {}, error: undefined, response: {} }
+    }
+    state.reminders.set(reminder.id, reminder)
+    await scheduleTimer(reminder, ctx, state, config)
+
+    const deletionError = Object.assign(new Error("simulated reminder deletion failure"), { code: "EIO" })
+    const rmFile = fsPromises.rm
+    const remove = spyOn(fsPromises, "rm").mockImplementation((async (file: any, options: any) => {
+      if (String(file).endsWith(`${reminder.id}.json`)) throw deletionError
+      return rmFile(file, options)
+    }) as any)
+    try {
+      await expect(cancelReminder(reminder.id, ctx, state, config)).rejects.toBe(deletionError)
+    } finally {
+      remove.mockRestore()
+    }
+
+    expect(await loadReminder(reminder.id, ctx)).toEqual(reminder)
+    expect(state.reminders.get(reminder.id)).toEqual(reminder)
+    expect(state.timers.has(reminder.id)).toBe(true)
+    expect(prompts).toBe(0)
+
+    await cancelReminder(reminder.id, ctx, state, config)
+    expect(await loadReminder(reminder.id, ctx)).toBeNull()
+    expect(state.reminders.has(reminder.id)).toBe(false)
+    expect(state.timers.has(reminder.id)).toBe(false)
   })
 
   test("executeReminder calls session prompt", async () => {
@@ -428,7 +471,7 @@ describe("Scheduler", () => {
     const execution = executeReminder(reminder, ctx, state, config)
     await promptStarted
     const lock = await acquireMutationLock(reminder.id, ctx)
-    const cancellation = cancelReminder(reminder.id, ctx, state)
+    const cancellation = cancelReminder(reminder.id, ctx, state, config)
     await lock.release()
     await cancellation
     finish()
@@ -456,7 +499,7 @@ describe("Scheduler", () => {
     await executeReminder(reminder, ctx, state, config)
     expect(await loadReminder(reminder.id, ctx)).not.toBeNull()
 
-    await cancelReminder(reminder.id, ctx, state)
+    await cancelReminder(reminder.id, ctx, state, config)
     expect(await loadReminder(reminder.id, ctx)).toBeNull()
     expect(state.reminders.has(reminder.id)).toBe(false)
     expect(state.timers.has(reminder.id)).toBe(false)
@@ -630,7 +673,7 @@ describe("Scheduler", () => {
     try {
       const reconciliation = reconcileReminder(reminder.id, ctx, state, config)
       await readCompleted.promise
-      await cancelReminder(reminder.id, ctx, state)
+      await cancelReminder(reminder.id, ctx, state, config)
 
       expect(state.reminders.has(reminder.id)).toBe(false)
       expect(state.timers.has(reminder.id)).toBe(false)
@@ -724,7 +767,7 @@ describe("Scheduler", () => {
     await scheduleTimer(reminder, ctx, state, config)
 
     const signal = await promptStarted.promise
-    await cancelReminder(reminder.id, ctx, state)
+    await cancelReminder(reminder.id, ctx, state, config)
     finishPrompt.resolve()
     const directory = await getStorageDir(ctx)
     await waitFor(async () => {
@@ -780,7 +823,7 @@ describe("Scheduler", () => {
     expect((await loadReminder(reminder.id, ctx))?.time.nextExecution).toBe(
       replacementReminder.time.nextExecution,
     )
-    await cancelReminder(reminder.id, ctx, replacement)
+    await cancelReminder(reminder.id, ctx, replacement, config)
   })
 
   test("forwards a captured agent and omits it for legacy reminders", async () => {
