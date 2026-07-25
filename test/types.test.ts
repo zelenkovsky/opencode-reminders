@@ -21,6 +21,26 @@ describe("Reminder Types", () => {
     expect(() => ReminderSchema.parse(validReminder)).not.toThrow()
   })
 
+  test("ReminderSchema allows legacy reminders without an agent", () => {
+    const legacyReminder = {
+      id: "test-123",
+      sessionID: "ses-456",
+      projectID: "prj-789",
+      type: "one-time" as const,
+      interval: 5000,
+      originalPrompt: "check /workspace/test.txt",
+      userDescription: "Test reminder",
+      time: {
+        created: Date.now(),
+        nextExecution: Date.now() + 5000,
+      },
+      status: "active" as const,
+    }
+
+    const parsed = ReminderSchema.parse(legacyReminder)
+    expect(parsed.agent).toBeUndefined()
+  })
+
   test("ReminderSchema rejects invalid type", () => {
     const invalidReminder = {
       id: "test-123",

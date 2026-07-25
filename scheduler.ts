@@ -64,6 +64,7 @@ export async function executeReminder(
             text: reminder.originalPrompt,
           },
         ],
+        ...(reminder.agent === undefined ? {} : { agent: reminder.agent }),
       },
     })
 

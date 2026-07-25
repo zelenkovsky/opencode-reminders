@@ -151,10 +151,12 @@ describe("Scheduler", () => {
   test("executeReminder calls session prompt", async () => {
     let promptCalled = false
     let capturedPrompt = ""
+    let capturedAgent: string | undefined
 
     ;(ctx.client.session.prompt as any) = async (opts: any) => {
       promptCalled = true
       capturedPrompt = opts.body?.parts?.[0]?.text || ""
+      capturedAgent = opts.body?.agent
       return { data: {} as any, error: undefined, response: {} as any }
     }
 
@@ -166,6 +168,7 @@ describe("Scheduler", () => {
       interval: 100,
       originalPrompt: "test prompt text",
       userDescription: "Execute test",
+      agent: "God",
       time: {
         created: Date.now(),
         nextExecution: Date.now() + 100,
@@ -180,6 +183,36 @@ describe("Scheduler", () => {
 
     expect(promptCalled).toBe(true)
     expect(capturedPrompt).toBe("test prompt text")
+    expect(capturedAgent).toBe("God")
+  })
+
+  test("executeReminder omits agent for legacy reminders", async () => {
+    let capturedBody: any
+
+    ;(ctx.client.session.prompt as any) = async (opts: any) => {
+      capturedBody = opts.body
+      return { data: {} as any, error: undefined, response: {} as any }
+    }
+
+    const reminder: Reminder = {
+      id: "rem-legacy-agent-test",
+      sessionID: "ses-test",
+      projectID: "test-project-123",
+      type: "one-time",
+      interval: 100,
+      originalPrompt: "legacy prompt text",
+      userDescription: "Legacy agent test",
+      time: {
+        created: Date.now(),
+        nextExecution: Date.now() + 100,
+      },
+      status: "active",
+    }
+
+    state.reminders.set(reminder.id, reminder)
+    await executeReminder(reminder, ctx, state, config)
+
+    expect(capturedBody).not.toHaveProperty("agent")
   })
 
   test("executeReminder updates lastExecution time", async () => {
